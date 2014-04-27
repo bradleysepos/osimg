@@ -1,0 +1,282 @@
+#!/bin/bash
+# osximg - create bootable disk images from Mac OS X install files
+#
+# Version 0.1.0 (2014-04-25)
+# Initial development. Mavericks supported.
+
+set -e
+set -u
+
+SELF="$0"
+SELF_NAME=$(basename "$SELF")
+
+# Super users only
+SUID=$(id -u root)
+if [[ "$UID" != "$SUID" ]]; then
+    ERROR="$SELF_NAME: cannot run as normal user, try sudo"
+    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+    exit 1
+fi
+
+# Datestamp
+DATE=$(date +%Y%m%d%H%M%S)
+
+# Handle arguments
+FORMAT="iso"
+SOURCE=""
+VERS="osx109"
+HELP="\
+usage: $SELF_NAME [-hv]
+       $SELF_NAME [-f format] [-i path] [-t version] path
+where:
+   -h  display this help text
+   -v  display version information
+   -f  specify format/method -- iso (default), apple (createinstallmedia 10.9+)
+   -i  specify source path (default /Applications/Install OS X [Version].app)
+   -t  specify target system version -- Mavericks (osx109, default)"
+VERSION="\
+osximg 0.1.0"
+while getopts ":f:hi:t:v" OPT
+do
+    case "${OPT}"
+    in
+        f)
+            # Method and format
+            if ! echo -n "$OPTARG" | grep -q '^\(apple\|iso\)$' >/dev/null; then
+                # Invalid option specified
+                ERROR="$SELF_NAME: invalid option for -f: $OPTARG"
+                echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+                echo -e "$HELP"
+                exit 1
+            fi
+            FORMAT="$OPTARG"
+            ;;
+        h)
+            # Print help and exit
+            echo -e "$HELP"
+            exit 0
+            ;;
+        i)
+            # Path to install files
+            SOURCE="$OPTARG"
+            ;;
+        t)
+            # Target system version
+            if ! echo -n "$OPTARG" | grep -q '^\(Mavericks\|osx109\)$' >/dev/null; then
+                # Invalid option specified
+                ERROR="$SELF_NAME: invalid option for -t: $OPTARG"
+                echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+                echo -e "$HELP"
+                exit 1
+            fi
+            VERS="$OPTARG"
+            case "$VERS"
+            in
+                "Mavericks")
+                    VERS="osx109"
+            esac
+            ;;
+        v)
+            # Print version and exit
+            echo -e "$VERSION"
+            exit 0
+            ;;
+        :)
+            # Option without required argument
+            ERROR="$SELF_NAME: option -$OPTARG requires a value"
+            echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+            echo -e "$HELP"
+            exit 1
+            ;;
+        \?)
+            # Invalid option specified
+            ERROR="$SELF_NAME: invalid option: -$OPTARG"
+            echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+            echo -e "$HELP"
+            exit 1
+            ;;
+    esac
+done
+
+# Get paths
+shift $(($OPTIND - 1))
+TARGET=""
+if [[ "$#" -eq 1 ]]; then
+    TARGET="$1"
+elif [[ "$#" -gt 1 ]]; then
+    # Too many arguments
+    ERROR="$SELF_NAME: too many arguments"
+    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+    echo -e "$HELP"
+    exit 1
+else
+    # Path not specified
+    ERROR="$SELF_NAME: path not specified"
+    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+    echo -e "$HELP"
+    exit 1
+fi
+
+# Function for Mac OS X 10.9 Mavericks, Apple USB
+function make_osx109_apple {
+
+    # Validate output paths
+    if [[ -e "$TARGET" ]]; then
+        # Path already exists
+        ERROR="$SELF_NAME: output path exists: $TARGET"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        echo -e "$HELP"
+        exit 1
+    elif [[ -e "$TARGET.tmp.sparsebundle" ]] || [[ -e "$TARGET.tmp.cdr" ]]; then
+        # Temporary file path(s) exist
+        ERROR="$SELF_NAME: unable to create temporary file"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        echo -e "$HELP"
+        exit 1
+    fi
+
+    # Validate paths to install files
+    if [[ "$SOURCE" == "" ]]; then
+        SOURCE="/Applications/Install OS X Mavericks.app"
+    fi
+    if [[ ! -e "$SOURCE" ]]; then
+        # Source path does not exist
+        ERROR="$SELF_NAME: source path does not exist: $SOURCE"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        echo -e "$HELP"
+        exit 1
+    fi
+    CIMTOOL="$SOURCE/Contents/Resources/createinstallmedia"
+    if [[ ! -e "$CIMTOOL" ]]; then
+        # Missing install files
+        ERROR="$SELF_NAME: createinstallmedia not found at path: $CIMTOOL"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        echo -e "$HELP"
+        exit 1
+    fi
+
+    # Some vars
+    TMPVOL="Mavericks Install Media $DATE"
+    NEWVOL="Install OS X Mavericks"
+
+    # Eject potentially conflicting volume
+    if [[ -e "/Volumes/$NEWVOL" ]]; then
+        hdiutil detach -quiet "/Volumes/$NEWVOL"
+        echo "Ejected volume /Volumes/$NEWVOL."
+    fi
+
+    # Create blank sparsebundle and run createinstallmedia tool
+    echo "Creating image..."
+    hdiutil create -quiet -size 8g -type SPARSEBUNDLE -fs HFS+ -nospotlight -volname "$TMPVOL" "$TARGET.tmp.sparsebundle"
+    hdiutil attach -quiet -nobrowse -noverify "$TARGET.tmp.sparsebundle"
+    "$SOURCE/Contents/Resources/createinstallmedia" --nointeraction --applicationpath "$SOURCE" --volume "/Volumes/$TMPVOL" | grep -v --line-buffered '^\(Done\.\|Copy complete\.\)$'
+
+    # Eject source volume
+    hdiutil detach -quiet "/Volumes/$NEWVOL"
+
+    # Shrink
+    echo "Shrinking image..."
+    hdiutil resize -quiet -size min "$TARGET.tmp.sparsebundle"
+    
+    # Convert and rename
+    echo "Converting image format..."
+    hdiutil convert -quiet "$TARGET.tmp.sparsebundle" -format UDTO -o "$TARGET.tmp.cdr"
+    mv "$TARGET.tmp.cdr" "$TARGET"
+    
+    # Clean
+    echo "Cleaning up..."
+    rm -rf "$TARGET.tmp.sparsebundle"
+
+    # Done
+    echo "Done."
+
+}
+
+# Function for Mac OS X 10.9 Mavericks, ISO/HFS hybrid bootable
+function make_osx109_iso {
+
+    # Validate output paths
+    if [[ -e "$TARGET" ]]; then
+        # Path already exists
+        ERROR="$SELF_NAME: output path exists: $TARGET"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        echo -e "$HELP"
+        exit 1
+    elif [[ -e "$TARGET.tmp.sparsebundle" ]] || [[ -e "$TARGET.tmp.sparsebundle.shadow" ]]; then
+        # Temporary file path(s) exist
+        ERROR="$SELF_NAME: unable to create temporary file"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        echo -e "$HELP"
+        exit 1
+    fi
+
+    # Validate paths to install files
+    if [[ "$SOURCE" == "" ]]; then
+        SOURCE="/Applications/Install OS X Mavericks.app"
+    fi
+    if [[ ! -e "$SOURCE" ]]; then
+        # Source path does not exist
+        ERROR="$SELF_NAME: source path does not exist: $SOURCE"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        echo -e "$HELP"
+        exit 1
+    fi
+    ESDPATH="$SOURCE/Contents/SharedSupport/InstallESD.dmg"
+    if ! hdiutil imageinfo -format "$ESDPATH" >/dev/null 2>&1; then
+        if ! hdiutil imageinfo -format "$SOURCE" >/dev/null 2>&1; then
+            # Missing install files
+            ERROR="$SELF_NAME: source image not found at path: $ESDPATH"
+            echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+            echo -e "$HELP"
+            exit 1
+        fi
+        ESDPATH="$SOURCE"
+    fi
+
+    # Some vars
+    ESDVOL="OS X Install ESD"
+    BASEVOL="OS X Base System"
+
+    # Eject potentially conflicting volumes
+    if [[ -e "/Volumes/$ESDVOL" ]]; then
+        hdiutil detach -quiet "/Volumes/$ESDVOL"
+        echo "Ejected volume /Volumes/$ESDVOL."
+    elif [[ -e "/Volumes/$BASEVOL" ]]; then
+        hdiutil detach -quiet "/Volumes/$BASEVOL"
+        echo "Ejected volume /Volumes/$BASEVOL."
+    fi
+
+    # Create temporary (shadow) image using BaseSystem.dmg as a template
+    echo "Creating image..."
+    hdiutil attach -quiet -nobrowse "$ESDPATH"
+    hdiutil convert -quiet "/Volumes/$ESDVOL/BaseSystem.dmg" -format UDSB -o "$TARGET.tmp.sparsebundle"
+    hdiutil resize -quiet -size 6g "$TARGET.tmp.sparsebundle"
+    hdiutil attach -quiet -nobrowse -owners on "$TARGET.tmp.sparsebundle" -shadow
+
+    # Copy system packages
+    echo "Copying system packages..."
+    rm "/Volumes/$BASEVOL/System/Installation/Packages"
+    ditto "/Volumes/$ESDVOL/Packages" "/Volumes/$BASEVOL/System/Installation/Packages"
+
+    # Eject source volumes
+    hdiutil detach -quiet "/Volumes/$ESDVOL"  # $ESDPATH
+    hdiutil detach -quiet "/Volumes/$BASEVOL" # $TARGET.tmp.sparsebundle
+
+    # Create final image
+    echo "Saving final image..."
+    hdiutil makehybrid -quiet -iso -hfs "$TARGET.tmp.sparsebundle" -shadow "$TARGET.tmp.sparsebundle.shadow" -o "$TARGET"
+
+    # Clean
+    echo "Cleaning up..."
+    rm -rf "$TARGET.tmp.sparsebundle.shadow"
+    rm -rf "$TARGET.tmp.sparsebundle"
+
+    # Done
+    echo "Done."
+
+}
+
+make_"$VERS"_"$FORMAT"
+
+# Done
+exit 0
