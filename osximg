@@ -1,6 +1,9 @@
 #!/bin/bash
 # osximg - create bootable disk images from Mac OS X install files
 #
+# Version 0.2.0 (2014-04-29)
+# Add support for Mountain Lion and Lion. Consolidate some code.
+#
 # Version 0.1.0 (2014-04-25)
 # Initial development. Mavericks supported.
 
@@ -22,24 +25,33 @@ fi
 DATE=$(date +%Y%m%d%H%M%S)
 
 # Handle arguments
+ATTACH=false
 FORMAT="iso"
 SOURCE=""
 VERS="osx109"
 HELP="\
 usage: $SELF_NAME [-hv]
-       $SELF_NAME [-f format] [-i path] [-t version] path
+       $SELF_NAME [-a] [-f format] [-i source] [-t version] path
 where:
    -h  display this help text
    -v  display version information
+   -a  attach/mount final image when complete
    -f  specify format/method -- iso (default), apple (createinstallmedia 10.9+)
    -i  specify source path (default /Applications/Install OS X [Version].app)
-   -t  specify target system version -- Mavericks (osx109, default)"
+   -t  specify target system version --
+         Mavericks      (osx109, default)
+         Mountain Lion  (osx108)
+         Lion           (osx107)"
 VERSION="\
-osximg 0.1.0"
-while getopts ":f:hi:t:v" OPT
+osximg 0.2.0"
+while getopts ":af:hi:t:v" OPT
 do
     case "${OPT}"
     in
+        a)
+            # Attach
+            ATTACH=true
+            ;;
         f)
             # Method and format
             if ! echo -n "$OPTARG" | grep -q '^\(apple\|iso\)$' >/dev/null; then
@@ -62,7 +74,7 @@ do
             ;;
         t)
             # Target system version
-            if ! echo -n "$OPTARG" | grep -q '^\(Mavericks\|osx109\)$' >/dev/null; then
+            if ! echo -n "$OPTARG" | grep -q '^\(Mavericks\|osx109\|Mountain Lion\|osx108\)$' >/dev/null; then
                 # Invalid option specified
                 ERROR="$SELF_NAME: invalid option for -t: $OPTARG"
                 echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
@@ -117,98 +129,8 @@ else
     exit 1
 fi
 
-# Function for Mac OS X 10.9 Mavericks, Apple USB
-function make_osx109_apple {
-
-    # Validate output paths
-    if [[ -e "$TARGET" ]]; then
-        # Path already exists
-        ERROR="$SELF_NAME: output path exists: $TARGET"
-        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-        echo -e "$HELP"
-        exit 1
-    elif [[ -e "$TARGET.tmp.sparsebundle" ]] || [[ -e "$TARGET.tmp.cdr" ]]; then
-        # Temporary file path(s) exist
-        ERROR="$SELF_NAME: unable to create temporary file"
-        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-        echo -e "$HELP"
-        exit 1
-    fi
-
-    # Validate paths to install files
-    if [[ "$SOURCE" == "" ]]; then
-        SOURCE="/Applications/Install OS X Mavericks.app"
-    fi
-    if [[ ! -e "$SOURCE" ]]; then
-        # Source path does not exist
-        ERROR="$SELF_NAME: source path does not exist: $SOURCE"
-        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-        echo -e "$HELP"
-        exit 1
-    fi
-    CIMTOOL="$SOURCE/Contents/Resources/createinstallmedia"
-    if [[ ! -e "$CIMTOOL" ]]; then
-        # Missing install files
-        ERROR="$SELF_NAME: createinstallmedia not found at path: $CIMTOOL"
-        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-        echo -e "$HELP"
-        exit 1
-    fi
-
-    # Some vars
-    TMPVOL="Mavericks Install Media $DATE"
-    NEWVOL="Install OS X Mavericks"
-
-    # Eject potentially conflicting volume
-    if [[ -e "/Volumes/$NEWVOL" ]]; then
-        hdiutil detach -quiet "/Volumes/$NEWVOL"
-        echo "Ejected volume /Volumes/$NEWVOL."
-    fi
-
-    # Create blank sparsebundle and run createinstallmedia tool
-    echo "Creating image..."
-    hdiutil create -quiet -size 8g -type SPARSEBUNDLE -fs HFS+ -nospotlight -volname "$TMPVOL" "$TARGET.tmp.sparsebundle"
-    hdiutil attach -quiet -nobrowse -noverify "$TARGET.tmp.sparsebundle"
-    "$SOURCE/Contents/Resources/createinstallmedia" --nointeraction --applicationpath "$SOURCE" --volume "/Volumes/$TMPVOL" | grep -v --line-buffered '^\(Done\.\|Copy complete\.\)$'
-
-    # Eject source volume
-    hdiutil detach -quiet "/Volumes/$NEWVOL"
-
-    # Shrink
-    echo "Shrinking image..."
-    hdiutil resize -quiet -size min "$TARGET.tmp.sparsebundle"
-    
-    # Convert and rename
-    echo "Converting image format..."
-    hdiutil convert -quiet "$TARGET.tmp.sparsebundle" -format UDTO -o "$TARGET.tmp.cdr"
-    mv "$TARGET.tmp.cdr" "$TARGET"
-    
-    # Clean
-    echo "Cleaning up..."
-    rm -rf "$TARGET.tmp.sparsebundle"
-
-    # Done
-    echo "Done."
-
-}
-
 # Function for Mac OS X 10.9 Mavericks, ISO/HFS hybrid bootable
 function make_osx109_iso {
-
-    # Validate output paths
-    if [[ -e "$TARGET" ]]; then
-        # Path already exists
-        ERROR="$SELF_NAME: output path exists: $TARGET"
-        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-        echo -e "$HELP"
-        exit 1
-    elif [[ -e "$TARGET.tmp.sparsebundle" ]] || [[ -e "$TARGET.tmp.sparsebundle.shadow" ]]; then
-        # Temporary file path(s) exist
-        ERROR="$SELF_NAME: unable to create temporary file"
-        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-        echo -e "$HELP"
-        exit 1
-    fi
 
     # Validate paths to install files
     if [[ "$SOURCE" == "" ]]; then
@@ -233,7 +155,16 @@ function make_osx109_iso {
         ESDPATH="$SOURCE"
     fi
 
-    # Some vars
+    # Validate temporary file paths
+    if [[ -e "$TARGET.tmp.sparsebundle" ]] || [[ -e "$TARGET.tmp.sparsebundle.shadow" ]]; then
+        # Temporary file path(s) exist
+        ERROR="$SELF_NAME: unable to create temporary file"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        echo -e "$HELP"
+        exit 1
+    fi
+
+    # Volume names
     ESDVOL="OS X Install ESD"
     BASEVOL="OS X Base System"
 
@@ -247,7 +178,7 @@ function make_osx109_iso {
     fi
 
     # Create temporary (shadow) image using BaseSystem.dmg as a template
-    echo "Creating image..."
+    echo "Creating temporary image..."
     hdiutil attach -quiet -nobrowse "$ESDPATH"
     hdiutil convert -quiet "/Volumes/$ESDVOL/BaseSystem.dmg" -format UDSB -o "$TARGET.tmp.sparsebundle"
     hdiutil resize -quiet -size 6g "$TARGET.tmp.sparsebundle"
@@ -262,7 +193,7 @@ function make_osx109_iso {
     hdiutil detach -quiet "/Volumes/$ESDVOL"  # $ESDPATH
     hdiutil detach -quiet "/Volumes/$BASEVOL" # $TARGET.tmp.sparsebundle
 
-    # Create final image
+    # Save final image
     echo "Saving final image..."
     hdiutil makehybrid -quiet -iso -hfs "$TARGET.tmp.sparsebundle" -shadow "$TARGET.tmp.sparsebundle.shadow" -o "$TARGET"
 
@@ -271,12 +202,184 @@ function make_osx109_iso {
     rm -rf "$TARGET.tmp.sparsebundle.shadow"
     rm -rf "$TARGET.tmp.sparsebundle"
 
-    # Done
-    echo "Done."
+}
+
+# Function for Mac OS X 10.9 Mavericks, Apple USB
+function make_osx109_apple {
+
+    # Validate paths to install files
+    if [[ "$SOURCE" == "" ]]; then
+        SOURCE="/Applications/Install OS X Mavericks.app"
+    fi
+    if [[ ! -e "$SOURCE" ]]; then
+        # Source path does not exist
+        ERROR="$SELF_NAME: source path does not exist: $SOURCE"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        echo -e "$HELP"
+        exit 1
+    fi
+    CIMTOOL="$SOURCE/Contents/Resources/createinstallmedia"
+    if [[ ! -e "$CIMTOOL" ]]; then
+        # Missing install files
+        ERROR="$SELF_NAME: createinstallmedia not found at path: $CIMTOOL"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        echo -e "$HELP"
+        exit 1
+    fi
+
+    # Validate temporary file paths
+    if [[ -e "$TARGET.tmp.sparsebundle" ]] || [[ -e "$TARGET.tmp.cdr" ]]; then
+        # Temporary file path(s) exist
+        ERROR="$SELF_NAME: unable to create temporary file"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        echo -e "$HELP"
+        exit 1
+    fi
+
+    # Volume names
+    TMPVOL="Mavericks Install Media $DATE"
+    NEWVOL="Install OS X Mavericks"
+
+    # Eject potentially conflicting volume
+    if [[ -e "/Volumes/$NEWVOL" ]]; then
+        hdiutil detach -quiet "/Volumes/$NEWVOL"
+        echo "Ejected volume /Volumes/$NEWVOL."
+    fi
+
+    # Create blank sparsebundle and run createinstallmedia tool
+    echo "Creating temporary image..."
+    hdiutil create -quiet -size 8g -type SPARSEBUNDLE -fs HFS+ -nospotlight -volname "$TMPVOL" "$TARGET.tmp.sparsebundle"
+    hdiutil attach -quiet -nobrowse -noverify "$TARGET.tmp.sparsebundle"
+    "$SOURCE/Contents/Resources/createinstallmedia" --nointeraction --applicationpath "$SOURCE" --volume "/Volumes/$TMPVOL" | grep -v --line-buffered '^\(Done\.\|Copy complete\.\)$'
+
+    # Eject source volume
+    hdiutil detach -quiet "/Volumes/$NEWVOL"
+
+    # Shrink
+    echo "Shrinking image..."
+    hdiutil resize -quiet -size min "$TARGET.tmp.sparsebundle"
+    
+    # Save final image
+    echo "Saving final image..."
+    hdiutil convert -quiet "$TARGET.tmp.sparsebundle" -format UDTO -o "$TARGET.tmp.cdr"
+
+    # Rename target
+    mv "$TARGET.tmp.cdr" "$TARGET"
+    
+    # Clean
+    echo "Cleaning up..."
+    rm -rf "$TARGET.tmp.sparsebundle"
 
 }
 
+# Function for Mac OS X 10.8 Mountain Lion, ISO/HFS hybrid bootable
+function make_osx108_iso {
+
+    # Validate paths to install files
+    if [[ "$SOURCE" == "" ]]; then
+        SOURCE="/Applications/Install OS X Mountain Lion.app"
+    fi
+    if [[ ! -e "$SOURCE" ]]; then
+        # Source path does not exist
+        ERROR="$SELF_NAME: source path does not exist: $SOURCE"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        echo -e "$HELP"
+        exit 1
+    fi
+    ESDPATH="$SOURCE/Contents/SharedSupport/InstallESD.dmg"
+    if ! hdiutil imageinfo -format "$ESDPATH" >/dev/null 2>&1; then
+        if ! hdiutil imageinfo -format "$SOURCE" >/dev/null 2>&1; then
+            # Missing install files
+            ERROR="$SELF_NAME: source image not found at path: $ESDPATH"
+            echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+            echo -e "$HELP"
+            exit 1
+        fi
+        ESDPATH="$SOURCE"
+    fi
+
+    # Volume names
+    ESDVOL="Mac OS X Install ESD"
+
+    # Eject potentially conflicting volumes
+    if [[ -e "/Volumes/$ESDVOL" ]]; then
+        hdiutil detach -quiet "/Volumes/$ESDVOL"
+        echo "Ejected volume /Volumes/$ESDVOL."
+    fi
+
+    # Save final image
+    echo "Saving final image..."
+    hdiutil makehybrid -quiet -iso -hfs "$ESDPATH" -o "$TARGET"
+
+}
+
+# Function for Mac OS X 10.7 Lion, ISO/HFS hybrid bootable
+function make_osx107_iso {
+
+    # Validate paths to install files
+    if [[ "$SOURCE" == "" ]]; then
+        SOURCE="/Applications/Install Mac OS X Lion.app"
+    fi
+    if [[ ! -e "$SOURCE" ]]; then
+        # Source path does not exist
+        ERROR="$SELF_NAME: source path does not exist: $SOURCE"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        echo -e "$HELP"
+        exit 1
+    fi
+    ESDPATH="$SOURCE/Contents/SharedSupport/InstallESD.dmg"
+    if ! hdiutil imageinfo -format "$ESDPATH" >/dev/null 2>&1; then
+        if ! hdiutil imageinfo -format "$SOURCE" >/dev/null 2>&1; then
+            # Missing install files
+            ERROR="$SELF_NAME: source image not found at path: $ESDPATH"
+            echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+            echo -e "$HELP"
+            exit 1
+        fi
+        ESDPATH="$SOURCE"
+    fi
+
+    # Volume names
+    ESDVOL="Mac OS X Install ESD"
+
+    # Eject potentially conflicting volumes
+    if [[ -e "/Volumes/$ESDVOL" ]]; then
+        hdiutil detach -quiet "/Volumes/$ESDVOL"
+        echo "Ejected volume /Volumes/$ESDVOL."
+    fi
+
+    # Save final image
+    echo "Saving final image..."
+    hdiutil makehybrid -quiet -iso -hfs "$ESDPATH" -o "$TARGET"
+
+}
+
+# Validate version and format
+if [[ "$FORMAT" == "apple" ]] && [[ "$VERS" != "osx109" ]]; then
+    # Format not supported
+    ERROR="$SELF_NAME: format '$FORMAT' (createinstallmedia) not supported prior to Mac OS X 10.9 Mavericks"
+    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+    echo -e "$HELP"
+    exit 1
+fi
+
+# Validate output paths
+if [[ -e "$TARGET" ]]; then
+    # Path already exists
+    ERROR="$SELF_NAME: output path exists: $TARGET"
+    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+    echo -e "$HELP"
+    exit 1
+fi
+
 make_"$VERS"_"$FORMAT"
 
+# Attach final image
+if $ATTACH; then
+    echo "Attaching..."
+    hdiutil attach -quiet -noverify "$TARGET"
+fi
+
 # Done
+echo "Done."
 exit 0
