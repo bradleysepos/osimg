@@ -1,6 +1,9 @@
 #!/bin/bash
 # osximg - create bootable disk images from Mac OS X install files
 #
+# Version 0.4.2 (2014-04-30)
+# Refactor target system version argument handling. Cosmetics.
+#
 # Version 0.4.1 (2014-04-29)
 # Improve validation. Do not require super user to print help/version.
 #
@@ -26,7 +29,7 @@ SELF_NAME=$(basename "$SELF")
 ATTACH=false
 FORMAT="iso"
 SOURCE=""
-TARGET=""
+OUTPUT=""
 VERS="osx109"
 HELP="\
 usage: $SELF_NAME [-hv]
@@ -42,7 +45,7 @@ where:
          Mountain Lion  (osx108)
          Lion           (osx107)"
 VERSION="\
-osximg 0.4.1"
+osximg 0.4.2"
 
 # Get source path
 if [[ "$#" -gt 0 ]] && [[ ! "${1:0:1}" = "-" ]]; then
@@ -85,22 +88,37 @@ do
             ;;
         o)
             # Output path
-            TARGET="$OPTARG"
+            OUTPUT="$OPTARG"
             ;;
         t)
             # Target system version
-            if ! echo -n "$OPTARG" | grep -q '^\(Mavericks\|osx109\|Mountain Lion\|osx108\|Lion\|osx107\)$' >/dev/null; then
-                # Invalid option specified
-                ERROR="$SELF_NAME: invalid option for -t: $OPTARG"
-                echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-                echo -e "$HELP"
-                exit 1
-            fi
             VERS="$OPTARG"
             case "$VERS"
             in
-                "Mavericks")
+                "osx109"|"Mavericks")
                     VERS="osx109"
+                    APP="Install OS X Mavericks.app"
+                    CIM="$SOURCE/Contents/Resources/createinstallmedia"
+                    CIM_MOUNT="/Volumes/Install OS X Mavericks"
+                    IESD="$SOURCE/Contents/SharedSupport/InstallESD.dmg"
+                    ;;
+                "osx108"|"Mountain Lion")
+                    VERS="osx108"
+                    APP="Install OS X Mountain Lion.app"
+                    IESD="$SOURCE/Contents/SharedSupport/InstallESD.dmg"
+                    ;;
+                "osx107"|"Lion")
+                    VERS="osx107"
+                    APP="Install Mac OS X Lion.app"
+                    IESD="$SOURCE/Contents/SharedSupport/InstallESD.dmg"
+                    ;;
+                *)
+                    # Invalid option specified
+                    ERROR="$SELF_NAME: invalid option for -t: $OPTARG"
+                    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+                    echo -e "$HELP"
+                    exit 1
+                    ;;
             esac
             ;;
         v)
@@ -148,15 +166,15 @@ elif [[ ! -e "$SOURCE" ]]; then
     echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
     echo -e "$HELP"
     exit 1
-elif [[ "$TARGET" == "" ]]; then
+elif [[ "$OUTPUT" == "" ]]; then
     # Output path not specified
     ERROR="$SELF_NAME: output path not specified"
     echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
     echo -e "$HELP"
     exit 1
-elif [[ -e "$TARGET" ]]; then
+elif [[ -e "$OUTPUT" ]]; then
     # Output path already exists
-    ERROR="$SELF_NAME: output path already exists: $TARGET"
+    ERROR="$SELF_NAME: output path already exists: $OUTPUT"
     echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
     echo -e "$HELP"
     exit 1
@@ -189,7 +207,7 @@ function make_osx109_iso {
 
     # Save final image
     echo "Saving final image..."
-    hdiutil makehybrid "$IMAGE" -o "$TARGET" -hfs -iso -quiet
+    hdiutil makehybrid "$IMAGE" -o "$OUTPUT" -hfs -iso -quiet
 
 }
 
@@ -220,7 +238,7 @@ function make_osx109_apple {
     hdiutil convert "$IMAGE" -o "$IMAGE.cdr" -format UDTO -quiet
 
     # Rename target
-    mv "$IMAGE.cdr" "$TARGET"
+    mv "$IMAGE.cdr" "$OUTPUT"
 
 }
 
@@ -229,7 +247,7 @@ function make_osx108_iso {
 
     # Save final image
     echo "Saving final image..."
-    hdiutil makehybrid "$IESD" -o "$TARGET" -hfs -iso -quiet
+    hdiutil makehybrid "$IESD" -o "$OUTPUT" -hfs -iso -quiet
 
 }
 
@@ -238,7 +256,7 @@ function make_osx107_iso {
 
     # Save final image
     echo "Saving final image..."
-    hdiutil makehybrid "$IESD" -o "$TARGET" -hfs -iso -quiet
+    hdiutil makehybrid "$IESD" -o "$OUTPUT" -hfs -iso -quiet
 
 }
 
@@ -250,23 +268,6 @@ if [[ "$FORMAT" == "apple" ]] && [[ "$VERS" != "osx109" ]]; then
     echo -e "$HELP"
     exit 1
 fi
-
-# Version defaults
-case "$VERS"
-in
-    osx109)
-        APP="Install OS X Mavericks.app"
-        CIM="$SOURCE/Contents/Resources/createinstallmedia"
-        CIM_MOUNT="/Volumes/Install OS X Mavericks"
-        ;;
-    osx108)
-        APP="Install OS X Mountain Lion.app"
-        ;;
-    osx107)
-        APP="Install Mac OS X Lion.app"
-        ;;
-esac
-IESD="$SOURCE/Contents/SharedSupport/InstallESD.dmg"
 
 # Validate source
 SOURCE_VALID=false
@@ -284,15 +285,15 @@ fi
 if $SOURCE_VALID; then
 
     # Create temporary directories
-    TARGET_NAME=$(basename "$TARGET")
-    TEMP=$(mktemp -d "$TARGET Temporary Files XXXXXX")
-    IMAGE="$TEMP/$TARGET_NAME.sparsebundle"
-    IMAGE_MOUNT="$TEMP/$TARGET_NAME.sparsebundle.mount"
-    IESD_MOUNT="$TEMP/$TARGET_NAME.installesd.mount"
-    BASE_MOUNT="$TEMP/$TARGET_NAME.basesystem.mount"
+    OUTPUT_NAME=$(basename "$OUTPUT")
+    TEMP=$(mktemp -d "$OUTPUT Temporary Files XXXXXX")
+    IMAGE="$TEMP/$OUTPUT_NAME.sparsebundle"
+    IMAGE_MOUNT="$TEMP/$OUTPUT_NAME.sparsebundle.mount"
+    IESD_MOUNT="$TEMP/$OUTPUT_NAME.installesd.mount"
+    BASE_MOUNT="$TEMP/$OUTPUT_NAME.basesystem.mount"
 
-    # Validate source
-    SOURCE_VALID_EXTENDED=false
+    # Validate source version
+    SOURCE_VERSION_VALID=false
     echo "Verifying source..."
     if hdiutil attach "$IESD" -mountpoint "$IESD_MOUNT" -nobrowse -quiet; then
         # Image attached
@@ -303,7 +304,7 @@ if $SOURCE_VALID; then
                     # Base system attached
                     if [[ -e "$BASE_MOUNT/$APP" ]]; then
                         # Reasonably certain version is valid
-                        SOURCE_VALID_EXTENDED=true
+                        SOURCE_VERSION_VALID=true
                     fi
                     hdiutil detach "$BASE_MOUNT" -quiet
                 fi
@@ -311,26 +312,26 @@ if $SOURCE_VALID; then
         else
             if [[ -e "$IESD_MOUNT/$APP" ]]; then
                 # Reasonably certain version is valid
-                SOURCE_VALID_EXTENDED=true
+                SOURCE_VERSION_VALID=true
             fi
         fi
         hdiutil detach "$IESD_MOUNT" -quiet
     fi
 
-    if $SOURCE_VALID_EXTENDED; then
+    if $SOURCE_VERSION_VALID; then
 
         make_"$VERS"_"$FORMAT"
 
         # Attach final image
         if $ATTACH; then
             echo "Attaching..."
-            hdiutil attach "$TARGET" -autoopen -verify -quiet
+            hdiutil attach "$OUTPUT" -autoopen -verify -quiet
         fi
 
     else
         # Source invalid
         rm -rf "$TEMP"
-        ERROR="$SELF_NAME: source invalid or wrong version"
+        ERROR="$SELF_NAME: invalid source version"
         echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
         echo -e "$HELP"
         exit 1
@@ -342,7 +343,7 @@ if $SOURCE_VALID; then
 
 else
     # Source invalid
-    ERROR="$SELF_NAME: source invalid"
+    ERROR="$SELF_NAME: invalid source"
     echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
     echo -e "$HELP"
     exit 1
