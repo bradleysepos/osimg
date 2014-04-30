@@ -1,6 +1,9 @@
 #!/bin/bash
 # osximg - create bootable disk images from Mac OS X install files
 #
+# Version 0.4.1 (2014-04-29)
+# Improve validation. Do not require super user to print help/version.
+#
 # Version 0.4.0 (2014-04-29)
 # Update API (osximg source -o path). Consolidate nearly all shared code.
 #
@@ -18,14 +21,6 @@ set -u
 
 SELF="$0"
 SELF_NAME=$(basename "$SELF")
-
-# Super users only
-SUID=$(id -u root)
-if [[ "$UID" != "$SUID" ]]; then
-    ERROR="$SELF_NAME: cannot run as normal user, try sudo"
-    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-    exit 1
-fi
 
 # Defaults
 ATTACH=false
@@ -47,12 +42,20 @@ where:
          Mountain Lion  (osx108)
          Lion           (osx107)"
 VERSION="\
-osximg 0.4.0"
+osximg 0.4.1"
 
 # Get source path
 if [[ "$#" -gt 0 ]] && [[ ! "${1:0:1}" = "-" ]]; then
     SOURCE="$1"
     shift 1
+fi
+
+# Super users only, except when printing help or version information
+SUID=$(id -u root)
+if [[ "$UID" != "$SUID" ]] && ( [[ "$#" -eq 0 ]] || grep -qv '^-\(h\|v\)' <<< "$1" ); then
+    ERROR="$SELF_NAME: cannot run as normal user, try sudo"
+    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+    exit 1
 fi
 
 # Handle arguments
@@ -159,15 +162,6 @@ elif [[ -e "$TARGET" ]]; then
     exit 1
 fi
 
-# Validate version and format
-if [[ "$FORMAT" == "apple" ]] && [[ "$VERS" != "osx109" ]]; then
-    # Format not supported
-    ERROR="$SELF_NAME: format '$FORMAT' (createinstallmedia) not supported prior to Mac OS X 10.9 Mavericks"
-    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-    echo -e "$HELP"
-    exit 1
-fi
-
 # Function for Mac OS X 10.9 Mavericks, ISO/HFS hybrid bootable
 function make_osx109_iso {
 
@@ -201,6 +195,12 @@ function make_osx109_iso {
 
 # Function for Mac OS X 10.9 Mavericks, Apple USB
 function make_osx109_apple {
+
+    # Eject potentially conflicting volume
+    if [[ -e "$CIM_MOUNT" ]]; then
+        hdiutil detach "$CIM_MOUNT" -quiet
+        echo "Ejected already mounted volume $CIM_MOUNT to avoid conflicts."
+    fi
 
     # Create temporary image and run createinstallmedia tool
     echo "Creating temporary image..."
@@ -242,6 +242,15 @@ function make_osx107_iso {
 
 }
 
+# Validate format
+if [[ "$FORMAT" == "apple" ]] && [[ "$VERS" != "osx109" ]]; then
+    # Format not supported
+    ERROR="$SELF_NAME: format '$FORMAT' (createinstallmedia) not supported for target system versions prior to Mac OS X 10.9 Mavericks"
+    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+    echo -e "$HELP"
+    exit 1
+fi
+
 # Version defaults
 case "$VERS"
 in
@@ -249,11 +258,6 @@ in
         APP="Install OS X Mavericks.app"
         CIM="$SOURCE/Contents/Resources/createinstallmedia"
         CIM_MOUNT="/Volumes/Install OS X Mavericks"
-        if [[ -e "$CIM_MOUNT" ]]; then
-            # Eject potentially conflicting volume
-            hdiutil detach "$CIM_MOUNT" -quiet
-            echo "Ejected already mounted volume $CIM_MOUNT to avoid conflicts."
-        fi
         ;;
     osx108)
         APP="Install OS X Mountain Lion.app"
@@ -265,26 +269,19 @@ esac
 IESD="$SOURCE/Contents/SharedSupport/InstallESD.dmg"
 
 # Validate source
-SOURCE_FOUND=false
-if [[ -e "$SOURCE" ]]; then
-    if hdiutil imageinfo -format "$IESD" >/dev/null 2>&1; then
-        # Got app bundle, image located
-        CIM="${CIM:-}"
-        if [[ "$CIM" != "" ]] && [[ -e "$CIM" ]]; then
-            # CIM found
-            SOURCE_FOUND=true;
-        elif [[ "$CIM" == "" ]]; then
-            # CIM not needed
-            SOURCE_FOUND=true;
-        fi
-    elif hdiutil imageinfo -format "$SOURCE" >/dev/null 2>&1; then
-        # Got image
-        SOURCE_FOUND=true;
-        IESD="$SOURCE"
-    fi
+SOURCE_VALID=false
+CIM="${CIM:-}"
+if hdiutil imageinfo -format "$IESD" >/dev/null 2>&1 && ( [[ "$CIM" == "" ]] || [[ -e "$CIM" ]] ); then
+    # Got app bundle, image located
+    # CIM located or not needed
+    SOURCE_VALID=true;
+elif hdiutil imageinfo -format "$SOURCE" >/dev/null 2>&1 && [[ "$CIM" == "" ]]; then
+    # Got image
+    SOURCE_VALID=true;
+    IESD="$SOURCE"
 fi
 
-if $SOURCE_FOUND; then
+if $SOURCE_VALID; then
 
     # Create temporary directories
     TARGET_NAME=$(basename "$TARGET")
@@ -294,8 +291,8 @@ if $SOURCE_FOUND; then
     IESD_MOUNT="$TEMP/$TARGET_NAME.installesd.mount"
     BASE_MOUNT="$TEMP/$TARGET_NAME.basesystem.mount"
 
-    # Attach and validate source
-    SOURCE_VALID=false
+    # Validate source
+    SOURCE_VALID_EXTENDED=false
     echo "Verifying source..."
     if hdiutil attach "$IESD" -mountpoint "$IESD_MOUNT" -nobrowse -quiet; then
         # Image attached
@@ -306,7 +303,7 @@ if $SOURCE_FOUND; then
                     # Base system attached
                     if [[ -e "$BASE_MOUNT/$APP" ]]; then
                         # Reasonably certain version is valid
-                        SOURCE_VALID=true
+                        SOURCE_VALID_EXTENDED=true
                     fi
                     hdiutil detach "$BASE_MOUNT" -quiet
                 fi
@@ -314,13 +311,13 @@ if $SOURCE_FOUND; then
         else
             if [[ -e "$IESD_MOUNT/$APP" ]]; then
                 # Reasonably certain version is valid
-                SOURCE_VALID=true
+                SOURCE_VALID_EXTENDED=true
             fi
         fi
         hdiutil detach "$IESD_MOUNT" -quiet
     fi
 
-    if $SOURCE_VALID; then
+    if $SOURCE_VALID_EXTENDED; then
 
         make_"$VERS"_"$FORMAT"
 
@@ -331,7 +328,7 @@ if $SOURCE_FOUND; then
         fi
 
     else
-        # Source not valid
+        # Source invalid
         rm -rf "$TEMP"
         ERROR="$SELF_NAME: source invalid or wrong version"
         echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
@@ -344,8 +341,8 @@ if $SOURCE_FOUND; then
     rm -rf "$TEMP"
 
 else
-    # Source path not found
-    ERROR="$SELF_NAME: source path not found"
+    # Source invalid
+    ERROR="$SELF_NAME: source invalid"
     echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
     echo -e "$HELP"
     exit 1
