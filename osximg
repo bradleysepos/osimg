@@ -1,6 +1,9 @@
 #!/bin/bash
 # osximg - create bootable disk images from Mac OS X install files
 #
+# Version 0.3.0 (2014-04-29)
+# Fix Lion. Add source validation. Use more robust temporary paths. Refactor.
+#
 # Version 0.2.0 (2014-04-29)
 # Add support for Mountain Lion and Lion. Consolidate some code.
 #
@@ -21,9 +24,6 @@ if [[ "$UID" != "$SUID" ]]; then
     exit 1
 fi
 
-# Datestamp
-DATE=$(date +%Y%m%d%H%M%S)
-
 # Handle arguments
 ATTACH=false
 FORMAT="iso"
@@ -43,7 +43,7 @@ where:
          Mountain Lion  (osx108)
          Lion           (osx107)"
 VERSION="\
-osximg 0.2.0"
+osximg 0.3.0"
 while getopts ":af:hi:t:v" OPT
 do
     case "${OPT}"
@@ -74,7 +74,7 @@ do
             ;;
         t)
             # Target system version
-            if ! echo -n "$OPTARG" | grep -q '^\(Mavericks\|osx109\|Mountain Lion\|osx108\)$' >/dev/null; then
+            if ! echo -n "$OPTARG" | grep -q '^\(Mavericks\|osx109\|Mountain Lion\|osx108\|Lion\|osx107\)$' >/dev/null; then
                 # Invalid option specified
                 ERROR="$SELF_NAME: invalid option for -t: $OPTARG"
                 echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
@@ -132,225 +132,349 @@ fi
 # Function for Mac OS X 10.9 Mavericks, ISO/HFS hybrid bootable
 function make_osx109_iso {
 
-    # Validate paths to install files
+    # Default paths
+    APP="Install OS X Mavericks.app"
     if [[ "$SOURCE" == "" ]]; then
-        SOURCE="/Applications/Install OS X Mavericks.app"
+        SOURCE="/Applications/$APP"
     fi
-    if [[ ! -e "$SOURCE" ]]; then
-        # Source path does not exist
-        ERROR="$SELF_NAME: source path does not exist: $SOURCE"
-        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-        echo -e "$HELP"
-        exit 1
+    IESD="$SOURCE/Contents/SharedSupport/InstallESD.dmg"
+
+    # Validate source
+    SOURCE_FOUND=false
+    if [[ -e "$SOURCE" ]]; then
+        if hdiutil imageinfo -format "$IESD" >/dev/null 2>&1; then
+            # Got app bundle, image located
+            SOURCE_FOUND=true;
+        elif hdiutil imageinfo -format "$SOURCE" >/dev/null 2>&1; then
+            # Got image
+            SOURCE_FOUND=true;
+            IESD="$SOURCE"
+        fi
     fi
-    ESDPATH="$SOURCE/Contents/SharedSupport/InstallESD.dmg"
-    if ! hdiutil imageinfo -format "$ESDPATH" >/dev/null 2>&1; then
-        if ! hdiutil imageinfo -format "$SOURCE" >/dev/null 2>&1; then
-            # Missing install files
-            ERROR="$SELF_NAME: source image not found at path: $ESDPATH"
+
+    if $SOURCE_FOUND; then
+
+        # Create temporary directories
+        TARGET_NAME=$(basename "$TARGET")
+        TEMP=$(mktemp -d "$TARGET Temporary Files XXXXXX")
+        IMAGE="$TEMP/$TARGET_NAME.sparsebundle"
+        IMAGE_MOUNT="$TEMP/$TARGET_NAME.sparsebundle.mount"
+        IESD_MOUNT="$TEMP/$TARGET_NAME.installesd.mount"
+        BASE_MOUNT="$TEMP/$TARGET_NAME.basesystem.mount"
+
+        # Attach and validate source
+        SOURCE_VALID=false
+        echo "Verifying source..."
+        if hdiutil attach "$IESD" -mountpoint "$IESD_MOUNT" -nobrowse -quiet; then
+            # Image attached
+            if [[ -e "$IESD_MOUNT/BaseSystem.dmg" ]] || [[ -e "$IESD_MOUNT/Packages" ]]; then
+                # Structure seems normal, base system found
+                if hdiutil attach "$IESD_MOUNT/BaseSystem.dmg" -mountpoint "$BASE_MOUNT" -nobrowse -quiet; then
+                    # Base system attached
+                    if [[ -e "$BASE_MOUNT/$APP" ]]; then
+                        # Reasonably certain this is Mavericks
+                        SOURCE_VALID=true
+                    fi
+                    hdiutil detach "$BASE_MOUNT" -quiet
+                fi
+            fi
+        fi
+
+        if $SOURCE_VALID; then
+
+            # Create temporary image
+            echo "Creating temporary image..."
+            hdiutil convert "$IESD_MOUNT/BaseSystem.dmg" -o "$IMAGE" -format UDSB -quiet
+            hdiutil resize "$IMAGE" -size 6g -quiet
+            hdiutil attach "$IMAGE" -mountpoint "$IMAGE_MOUNT" -owners on -nobrowse -quiet
+
+            # Copy system packages
+            echo "Copying system packages..."
+            rm "$IMAGE_MOUNT/System/Installation/Packages"
+            ditto "$IESD_MOUNT/Packages" "$IMAGE_MOUNT/System/Installation/Packages"
+
+            # Eject source volumes
+            hdiutil detach "$IESD_MOUNT" -quiet
+            hdiutil detach "$IMAGE_MOUNT" -quiet
+
+            # Shrink
+            echo "Shrinking image..."
+            hdiutil resize -quiet -size min "$IMAGE"
+
+            # Save final image
+            echo "Saving final image..."
+            hdiutil makehybrid "$IMAGE" -o "$TARGET" -hfs -iso -quiet
+
+            # Clean
+            echo "Cleaning up..."
+            rm -rf "$TEMP"
+
+        else
+            # Source not valid
+            hdiutil detach "$IESD_MOUNT" -quiet && rm -rf "$TEMP"
+            ERROR="$SELF_NAME: source invalid or wrong version"
             echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
             echo -e "$HELP"
             exit 1
         fi
-        ESDPATH="$SOURCE"
-    fi
-
-    # Validate temporary file paths
-    if [[ -e "$TARGET.tmp.sparsebundle" ]] || [[ -e "$TARGET.tmp.sparsebundle.shadow" ]]; then
-        # Temporary file path(s) exist
-        ERROR="$SELF_NAME: unable to create temporary file"
+    else
+        # Source not found
+        ERROR="$SELF_NAME: source not found"
         echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
         echo -e "$HELP"
         exit 1
     fi
-
-    # Volume names
-    ESDVOL="OS X Install ESD"
-    BASEVOL="OS X Base System"
-
-    # Eject potentially conflicting volumes
-    if [[ -e "/Volumes/$ESDVOL" ]]; then
-        hdiutil detach -quiet "/Volumes/$ESDVOL"
-        echo "Ejected volume /Volumes/$ESDVOL."
-    elif [[ -e "/Volumes/$BASEVOL" ]]; then
-        hdiutil detach -quiet "/Volumes/$BASEVOL"
-        echo "Ejected volume /Volumes/$BASEVOL."
-    fi
-
-    # Create temporary (shadow) image using BaseSystem.dmg as a template
-    echo "Creating temporary image..."
-    hdiutil attach -quiet -nobrowse "$ESDPATH"
-    hdiutil convert -quiet "/Volumes/$ESDVOL/BaseSystem.dmg" -format UDSB -o "$TARGET.tmp.sparsebundle"
-    hdiutil resize -quiet -size 6g "$TARGET.tmp.sparsebundle"
-    hdiutil attach -quiet -nobrowse -owners on "$TARGET.tmp.sparsebundle" -shadow
-
-    # Copy system packages
-    echo "Copying system packages..."
-    rm "/Volumes/$BASEVOL/System/Installation/Packages"
-    ditto "/Volumes/$ESDVOL/Packages" "/Volumes/$BASEVOL/System/Installation/Packages"
-
-    # Eject source volumes
-    hdiutil detach -quiet "/Volumes/$ESDVOL"  # $ESDPATH
-    hdiutil detach -quiet "/Volumes/$BASEVOL" # $TARGET.tmp.sparsebundle
-
-    # Save final image
-    echo "Saving final image..."
-    hdiutil makehybrid -quiet -iso -hfs "$TARGET.tmp.sparsebundle" -shadow "$TARGET.tmp.sparsebundle.shadow" -o "$TARGET"
-
-    # Clean
-    echo "Cleaning up..."
-    rm -rf "$TARGET.tmp.sparsebundle.shadow"
-    rm -rf "$TARGET.tmp.sparsebundle"
 
 }
 
 # Function for Mac OS X 10.9 Mavericks, Apple USB
 function make_osx109_apple {
 
-    # Validate paths to install files
+    # Default paths
+    APP="Install OS X Mavericks.app"
     if [[ "$SOURCE" == "" ]]; then
-        SOURCE="/Applications/Install OS X Mavericks.app"
+        SOURCE="/Applications/$APP"
     fi
-    if [[ ! -e "$SOURCE" ]]; then
-        # Source path does not exist
-        ERROR="$SELF_NAME: source path does not exist: $SOURCE"
-        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-        echo -e "$HELP"
-        exit 1
-    fi
-    CIMTOOL="$SOURCE/Contents/Resources/createinstallmedia"
-    if [[ ! -e "$CIMTOOL" ]]; then
-        # Missing install files
-        ERROR="$SELF_NAME: createinstallmedia not found at path: $CIMTOOL"
-        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-        echo -e "$HELP"
-        exit 1
+    IESD="$SOURCE/Contents/SharedSupport/InstallESD.dmg"
+    CIM="$SOURCE/Contents/Resources/createinstallmedia"
+
+    # Validate source
+    SOURCE_FOUND=false
+    if [[ -e "$SOURCE" ]]; then
+        if hdiutil imageinfo -format "$IESD" >/dev/null 2>&1; then
+            # Got app bundle, image located
+            SOURCE_FOUND=true;
+        fi
     fi
 
-    # Validate temporary file paths
-    if [[ -e "$TARGET.tmp.sparsebundle" ]] || [[ -e "$TARGET.tmp.cdr" ]]; then
-        # Temporary file path(s) exist
-        ERROR="$SELF_NAME: unable to create temporary file"
-        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-        echo -e "$HELP"
-        exit 1
+    # Validate createinstallmedia
+    CIM_FOUND=false
+    if [[ -e "$CIM" ]]; then
+        CIM_FOUND=true;
     fi
 
-    # Volume names
-    TMPVOL="Mavericks Install Media $DATE"
-    NEWVOL="Install OS X Mavericks"
+    if $SOURCE_FOUND && $CIM_FOUND; then
 
-    # Eject potentially conflicting volume
-    if [[ -e "/Volumes/$NEWVOL" ]]; then
-        hdiutil detach -quiet "/Volumes/$NEWVOL"
-        echo "Ejected volume /Volumes/$NEWVOL."
-    fi
+        # Create temporary directories
+        TARGET_NAME=$(basename "$TARGET")
+        TEMP=$(mktemp -d "$TARGET Temporary Files XXXXXX")
+        IMAGE="$TEMP/$TARGET_NAME.sparsebundle"
+        IMAGE_MOUNT="$TEMP/$TARGET_NAME.sparsebundle.mount"
+        IESD_MOUNT="$TEMP/$TARGET_NAME.installesd.mount"
+        BASE_MOUNT="$TEMP/$TARGET_NAME.basesystem.mount"
 
-    # Create blank sparsebundle and run createinstallmedia tool
-    echo "Creating temporary image..."
-    hdiutil create -quiet -size 8g -type SPARSEBUNDLE -fs HFS+ -nospotlight -volname "$TMPVOL" "$TARGET.tmp.sparsebundle"
-    hdiutil attach -quiet -nobrowse -noverify "$TARGET.tmp.sparsebundle"
-    "$SOURCE/Contents/Resources/createinstallmedia" --nointeraction --applicationpath "$SOURCE" --volume "/Volumes/$TMPVOL" | grep -v --line-buffered '^\(Done\.\|Copy complete\.\)$'
+        # Attach and validate source
+        SOURCE_VALID=false
+        echo "Verifying source..."
+        if hdiutil attach "$IESD" -mountpoint "$IESD_MOUNT" -nobrowse -quiet; then
+            # Image attached
+            if [[ -e "$IESD_MOUNT/BaseSystem.dmg" ]] || [[ -e "$IESD_MOUNT/Packages" ]]; then
+                # Structure seems normal, base system found
+                if hdiutil attach "$IESD_MOUNT/BaseSystem.dmg" -mountpoint "$BASE_MOUNT" -nobrowse -quiet; then
+                    # Base system attached
+                    if [[ -e "$BASE_MOUNT/$APP" ]]; then
+                        # Reasonably certain this is Mavericks
+                        SOURCE_VALID=true
+                    fi
+                    hdiutil detach "$BASE_MOUNT" -quiet
+                fi
+            fi
+            hdiutil detach "$IESD_MOUNT" -quiet
+        fi
 
-    # Eject source volume
-    hdiutil detach -quiet "/Volumes/$NEWVOL"
+        if $SOURCE_VALID; then
 
-    # Shrink
-    echo "Shrinking image..."
-    hdiutil resize -quiet -size min "$TARGET.tmp.sparsebundle"
+            # Eject potentially conflicting volume
+            CIM_VOLUME="Install OS X Mavericks"
+            if [[ -e "/Volumes/$CIM_VOLUME" ]]; then
+                hdiutil detach "/Volumes/$CIM_VOLUME" -quiet
+                echo "Ejected already mounted volume /Volumes/$CIM_VOLUME to avoid conflicts."
+            fi
+
+            # Create temporary image and run createinstallmedia tool
+            echo "Creating temporary image..."
+            hdiutil create "$IMAGE" -fs HFS+ -size 8g -type SPARSEBUNDLE -nospotlight -quiet
+            hdiutil attach "$IMAGE" -mountpoint "$IMAGE_MOUNT" -nobrowse -noverify -quiet
+            "$CIM" --nointeraction --applicationpath "$SOURCE" --volume "$IMAGE_MOUNT" | grep -v --line-buffered '^\(Done\.\|Copy complete\.\)$'
+            exit
+
+            # Eject source volume
+            hdiutil detach -quiet "/Volumes/$CIM_VOLUME"
+
+            # Shrink
+            echo "Shrinking image..."
+            hdiutil resize "$IMAGE" -size min -quiet
     
-    # Save final image
-    echo "Saving final image..."
-    hdiutil convert -quiet "$TARGET.tmp.sparsebundle" -format UDTO -o "$TARGET.tmp.cdr"
+            # Save final image
+            echo "Saving final image..."
+            hdiutil convert "$IMAGE" -o "$IMAGE.cdr" -format UDTO -quiet
 
-    # Rename target
-    mv "$TARGET.tmp.cdr" "$TARGET"
+            # Rename target
+            mv "$IMAGE.cdr" "$TARGET"
     
-    # Clean
-    echo "Cleaning up..."
-    rm -rf "$TARGET.tmp.sparsebundle"
+            # Clean
+            echo "Cleaning up..."
+            rm -rf "$TEMP"
+
+        else
+            # Source not valid
+            rm -rf "$TEMP"
+            ERROR="$SELF_NAME: source invalid or wrong version"
+            echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+            echo -e "$HELP"
+            exit 1
+        fi
+    else
+        # Source not found
+        ERROR="$SELF_NAME: source not found"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        echo -e "$HELP"
+        exit 1
+    fi
 
 }
 
 # Function for Mac OS X 10.8 Mountain Lion, ISO/HFS hybrid bootable
 function make_osx108_iso {
 
-    # Validate paths to install files
+    # Default paths
+    APP="Install OS X Mountain Lion.app"
     if [[ "$SOURCE" == "" ]]; then
-        SOURCE="/Applications/Install OS X Mountain Lion.app"
+        SOURCE="/Applications/$APP"
     fi
-    if [[ ! -e "$SOURCE" ]]; then
-        # Source path does not exist
-        ERROR="$SELF_NAME: source path does not exist: $SOURCE"
-        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-        echo -e "$HELP"
-        exit 1
+    IESD="$SOURCE/Contents/SharedSupport/InstallESD.dmg"
+
+    # Validate source
+    SOURCE_FOUND=false
+    if [[ -e "$SOURCE" ]]; then
+        if hdiutil imageinfo -format "$IESD" >/dev/null 2>&1; then
+            # Got app bundle, image located
+            SOURCE_FOUND=true;
+        elif hdiutil imageinfo -format "$SOURCE" >/dev/null 2>&1; then
+            # Got image
+            SOURCE_FOUND=true;
+            IESD="$SOURCE"
+        fi
     fi
-    ESDPATH="$SOURCE/Contents/SharedSupport/InstallESD.dmg"
-    if ! hdiutil imageinfo -format "$ESDPATH" >/dev/null 2>&1; then
-        if ! hdiutil imageinfo -format "$SOURCE" >/dev/null 2>&1; then
-            # Missing install files
-            ERROR="$SELF_NAME: source image not found at path: $ESDPATH"
+
+    if $SOURCE_FOUND; then
+
+        # Create temporary directories
+        TARGET_NAME=$(basename "$TARGET")
+        TEMP=$(mktemp -d "$TARGET Temporary Files XXXXXX")
+        IMAGE="$TEMP/$TARGET_NAME.sparsebundle"
+        IMAGE_MOUNT="$TEMP/$TARGET_NAME.sparsebundle.mount"
+        IESD_MOUNT="$TEMP/$TARGET_NAME.installesd.mount"
+
+        # Attach and validate source
+        SOURCE_VALID=false
+        echo "Verifying source..."
+        if hdiutil attach "$IESD" -mountpoint "$IESD_MOUNT" -nobrowse -quiet; then
+            # Image attached
+            if [[ -e "$IESD_MOUNT/$APP" ]]; then
+                # Reasonably certain this is Mountain Lion
+                SOURCE_VALID=true
+            fi
+            hdiutil detach "$IESD_MOUNT" -quiet
+        fi
+
+        if $SOURCE_VALID; then
+
+            # Save final image
+            echo "Saving final image..."
+            hdiutil makehybrid "$IESD" -o "$TARGET" -hfs -iso -quiet
+
+            # Clean
+            echo "Cleaning up..."
+            rm -rf "$TEMP"
+
+        else
+            # Source not valid
+            hdiutil detach "$IESD_MOUNT" -quiet && rm -rf "$TEMP"
+            ERROR="$SELF_NAME: source invalid or wrong version"
             echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
             echo -e "$HELP"
             exit 1
         fi
-        ESDPATH="$SOURCE"
+    else
+        # Source not found
+        ERROR="$SELF_NAME: source not found"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        echo -e "$HELP"
+        exit 1
     fi
-
-    # Volume names
-    ESDVOL="Mac OS X Install ESD"
-
-    # Eject potentially conflicting volumes
-    if [[ -e "/Volumes/$ESDVOL" ]]; then
-        hdiutil detach -quiet "/Volumes/$ESDVOL"
-        echo "Ejected volume /Volumes/$ESDVOL."
-    fi
-
-    # Save final image
-    echo "Saving final image..."
-    hdiutil makehybrid -quiet -iso -hfs "$ESDPATH" -o "$TARGET"
 
 }
 
 # Function for Mac OS X 10.7 Lion, ISO/HFS hybrid bootable
 function make_osx107_iso {
 
-    # Validate paths to install files
+    # Default paths
+    APP="Install Mac OS X Lion.app"
     if [[ "$SOURCE" == "" ]]; then
-        SOURCE="/Applications/Install Mac OS X Lion.app"
+        SOURCE="/Applications/$APP"
     fi
-    if [[ ! -e "$SOURCE" ]]; then
-        # Source path does not exist
-        ERROR="$SELF_NAME: source path does not exist: $SOURCE"
-        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-        echo -e "$HELP"
-        exit 1
+    IESD="$SOURCE/Contents/SharedSupport/InstallESD.dmg"
+
+    # Validate source
+    SOURCE_FOUND=false
+    if [[ -e "$SOURCE" ]]; then
+        if hdiutil imageinfo -format "$IESD" >/dev/null 2>&1; then
+            # Got app bundle, image located
+            SOURCE_FOUND=true;
+        elif hdiutil imageinfo -format "$SOURCE" >/dev/null 2>&1; then
+            # Got image
+            SOURCE_FOUND=true;
+            IESD="$SOURCE"
+        fi
     fi
-    ESDPATH="$SOURCE/Contents/SharedSupport/InstallESD.dmg"
-    if ! hdiutil imageinfo -format "$ESDPATH" >/dev/null 2>&1; then
-        if ! hdiutil imageinfo -format "$SOURCE" >/dev/null 2>&1; then
-            # Missing install files
-            ERROR="$SELF_NAME: source image not found at path: $ESDPATH"
+
+    if $SOURCE_FOUND; then
+
+        # Create temporary directories
+        TARGET_NAME=$(basename "$TARGET")
+        TEMP=$(mktemp -d "$TARGET Temporary Files XXXXXX")
+        IMAGE="$TEMP/$TARGET_NAME.sparsebundle"
+        IMAGE_MOUNT="$TEMP/$TARGET_NAME.sparsebundle.mount"
+        IESD_MOUNT="$TEMP/$TARGET_NAME.installesd.mount"
+
+        # Attach and validate source
+        SOURCE_VALID=false
+        echo "Verifying source..."
+        if hdiutil attach "$IESD" -mountpoint "$IESD_MOUNT" -nobrowse -quiet; then
+            # Image attached
+            if [[ -e "$IESD_MOUNT/$APP" ]]; then
+                # Reasonably certain this is Lion
+                SOURCE_VALID=true
+            fi
+            hdiutil detach "$IESD_MOUNT" -quiet
+        fi
+
+        if $SOURCE_VALID; then
+
+            # Save final image
+            echo "Saving final image..."
+            hdiutil makehybrid "$IESD" -o "$TARGET" -hfs -iso -quiet
+
+            # Clean
+            echo "Cleaning up..."
+            rm -rf "$TEMP"
+
+        else
+            # Source not valid
+            hdiutil detach "$IESD_MOUNT" -quiet && rm -rf "$TEMP"
+            ERROR="$SELF_NAME: source invalid or wrong version"
             echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
             echo -e "$HELP"
             exit 1
         fi
-        ESDPATH="$SOURCE"
+    else
+        # Source not found
+        ERROR="$SELF_NAME: source not found"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        echo -e "$HELP"
+        exit 1
     fi
-
-    # Volume names
-    ESDVOL="Mac OS X Install ESD"
-
-    # Eject potentially conflicting volumes
-    if [[ -e "/Volumes/$ESDVOL" ]]; then
-        hdiutil detach -quiet "/Volumes/$ESDVOL"
-        echo "Ejected volume /Volumes/$ESDVOL."
-    fi
-
-    # Save final image
-    echo "Saving final image..."
-    hdiutil makehybrid -quiet -iso -hfs "$ESDPATH" -o "$TARGET"
 
 }
 
@@ -377,7 +501,7 @@ make_"$VERS"_"$FORMAT"
 # Attach final image
 if $ATTACH; then
     echo "Attaching..."
-    hdiutil attach -quiet -noverify "$TARGET"
+    hdiutil attach "$TARGET" -autoopen -verify -quiet
 fi
 
 # Done
