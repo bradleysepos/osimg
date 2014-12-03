@@ -1,6 +1,9 @@
 #!/bin/bash
 # osximg - create bootable disk images from Mac OS X install files
 #
+# Version 0.6.0 (2014-12-03)
+# Add support for Yosemite. Rename some variables.
+#
 # Version 0.5.0 (2014-04-30)
 # Add automatic system version detection, remove -t. Improve file handling.
 #
@@ -29,9 +32,10 @@ SELF="$0"
 SELF_NAME=$(basename "$SELF")
 
 # Defaults
-APP_OSX109="Install OS X Mavericks.app"
-APP_OSX108="Install OS X Mountain Lion.app"
-APP_OSX107="Install Mac OS X Lion.app"
+OSX1010_APP="Install OS X Yosemite.app"
+OSX109_APP="Install OS X Mavericks.app"
+OSX108_APP="Install OS X Mountain Lion.app"
+OSX107_APP="Install Mac OS X Lion.app"
 ATTACH=false
 FORMAT="iso"
 OUTPUT=""
@@ -47,7 +51,7 @@ where:
    -f  specify format/method -- iso (default), apple (createinstallmedia 10.9+)
    -o  specify output path"
 VERSION="\
-osximg 0.5.0"
+osximg 0.6.0"
 
 # Get source path
 if [[ "$#" -gt 0 ]] && [[ ! "${1:0:1}" = "-" ]]; then
@@ -172,6 +176,74 @@ function remove_temp {
 
 }
 
+# Function for Mac OS X 10.10 Yosemite, ISO/HFS hybrid bootable
+function make_osx1010_iso {
+
+    # Attach source
+    hdiutil attach "$IESD" -mountpoint "$IESD_MOUNT" -nobrowse -quiet
+
+    # Create temporary image
+    echo "Creating temporary image..."
+    hdiutil convert "$IESD_MOUNT/BaseSystem.dmg" -o "$IMAGE.sparsebundle" -format UDSB -quiet
+    hdiutil resize "$IMAGE.sparsebundle" -size 8g -quiet
+    hdiutil attach "$IMAGE.sparsebundle" -mountpoint "$IMAGE_MOUNT" -owners on -nobrowse -quiet
+
+    # Copy system packages
+    echo "Copying system packages..."
+    rm "$IMAGE_MOUNT/System/Installation/Packages"
+    ditto "$IESD_MOUNT/Packages" "$IMAGE_MOUNT/System/Installation/Packages"
+    ditto "$IESD_MOUNT/BaseSystem.chunklist" "$IMAGE_MOUNT/BaseSystem.chunklist"
+    ditto "$IESD_MOUNT/BaseSystem.dmg" "$IMAGE_MOUNT/BaseSystem.dmg"
+
+    # Eject source volumes
+    hdiutil detach "$IESD_MOUNT" -quiet
+    hdiutil detach "$IMAGE_MOUNT" -quiet
+
+    # Shrink
+    echo "Shrinking image..."
+    hdiutil resize -quiet -size min "$IMAGE.sparsebundle"
+
+    # Save final image
+    echo "Saving final image..."
+    hdiutil makehybrid "$IMAGE.sparsebundle" -o "$IMAGE.iso" -hfs -iso -quiet
+
+    # Rename target
+    mv "$IMAGE.iso" "$OUTPUT"
+
+}
+
+# Function for Mac OS X 10.10 Yosemite, Apple USB
+function make_osx1010_apple {
+
+    # Eject potentially conflicting volume
+    CIM_MOUNT="/Volumes/Install OS X Yosemite"
+    if [[ -e "$CIM_MOUNT" ]]; then
+        hdiutil detach "$CIM_MOUNT" -quiet
+        echo "Ejected already mounted volume $CIM_MOUNT to avoid conflicts."
+    fi
+
+    # Create temporary image and run createinstallmedia tool
+    echo "Creating temporary image..."
+    hdiutil create "$IMAGE.sparsebundle" -fs HFS+ -size 8g -type SPARSEBUNDLE -nospotlight -quiet
+    hdiutil attach "$IMAGE.sparsebundle" -mountpoint "$IMAGE_MOUNT" -nobrowse -noverify -quiet
+    "$SOURCE/Contents/Resources/createinstallmedia" --nointeraction --applicationpath "$SOURCE" --volume "$IMAGE_MOUNT" | grep -v --line-buffered '^\(Done\.\|Copy complete\.\)$'
+
+    # Eject source volume
+    hdiutil detach "$CIM_MOUNT" -quiet
+
+    # Shrink
+    echo "Shrinking image..."
+    hdiutil resize "$IMAGE.sparsebundle" -size min -quiet
+
+    # Save final image
+    echo "Saving final image..."
+    hdiutil convert "$IMAGE.sparsebundle" -o "$IMAGE.cdr" -format UDTO -quiet
+
+    # Rename target
+    mv "$IMAGE.cdr" "$OUTPUT"
+
+}
+
 # Function for Mac OS X 10.9 Mavericks, ISO/HFS hybrid bootable
 function make_osx109_iso {
 
@@ -280,20 +352,25 @@ if ! hdiutil imageinfo -format "$IESD" >/dev/null 2>&1 && hdiutil imageinfo -for
 fi
 if hdiutil attach "$IESD" -mountpoint "$IESD_MOUNT" -nobrowse -quiet; then
     # Image attached
-    if [[ -e "$IESD_MOUNT/$APP_OSX107" ]]; then
+    if [[ -e "$IESD_MOUNT/$OSX107_APP" ]]; then
         # Got Lion
         echo "Mac OS X 10.7 Lion detected."
         VERS="osx107"
-    elif [[ -e "$IESD_MOUNT/$APP_OSX108" ]]; then
+    elif [[ -e "$IESD_MOUNT/$OSX108_APP" ]]; then
         # Got Mountain Lion
         echo "Mac OS X 10.8 Mountain Lion detected."
         VERS="osx108"
     else
         if hdiutil attach "$IESD_MOUNT/BaseSystem.dmg" -mountpoint "$BASE_MOUNT" -nobrowse -quiet; then
-            if [[ -e "$BASE_MOUNT/$APP_OSX109" ]] && [[ -e "$SOURCE/Contents/Resources/createinstallmedia" ]]; then
+            if [[ -e "$BASE_MOUNT/$OSX109_APP" ]] && [[ -e "$SOURCE/Contents/Resources/createinstallmedia" ]]; then
                 # Got Mavericks
                 echo "Mac OS X 10.9 Mavericks detected."
                 VERS="osx109"
+            fi
+            if [[ -e "$BASE_MOUNT/$OSX1010_APP" ]] && [[ -e "$SOURCE/Contents/Resources/createinstallmedia" ]]; then
+                # Got Yosemite
+                echo "Mac OS X 10.10 Yosemite detected."
+                VERS="osx1010"
             fi
             hdiutil detach "$BASE_MOUNT" -quiet
         fi
@@ -308,12 +385,14 @@ if [[ "$VERS" == "" ]]; then
     ERROR="$SELF_NAME: source invalid or version not supported"
     echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
     exit 1
-elif [[ "$FORMAT" == "apple" ]] && [[ "$VERS" != "osx109" ]]; then
-    # Format not supported
-    remove_temp
-    ERROR="$SELF_NAME: format '$FORMAT' (createinstallmedia) not supported for target system versions prior to Mac OS X 10.9 Mavericks"
-    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-    exit 1
+elif [[ "$FORMAT" == "apple" ]]; then
+    if [[ "$VERS" == "osx107" ]] || [[ "$VERS" == "osx108" ]]; then
+        # Format not supported
+        remove_temp
+        ERROR="$SELF_NAME: format '$FORMAT' (createinstallmedia) not supported for target system versions prior to Mac OS X 10.9 Mavericks"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        exit 1
+    fi
 fi
 
 # Build image
