@@ -1,6 +1,9 @@
 #!/bin/bash
 # osximg - create bootable disk images from Mac OS X install files
 #
+# Version 0.9.1 (2015-07-13)
+# Consolidate Lion and Mountain Lion. Rearrange some code.
+#
 # Version 0.9.0 (2015-07-13)
 # Consolidate error handling code and improve reporting. Prefer variable
 # substitution over assignment of default values. Fix output path in certain
@@ -58,7 +61,7 @@ where:
    -v  display version information
    -a  attach/mount final image when complete"
 VERSION="\
-osximg 0.9.0"
+osximg 0.9.1"
 
 # Cleans up temporary resources
 function clean_up {
@@ -137,6 +140,104 @@ function exit_with_error {
     fi
     clean_up
     exit "${1}"
+}
+
+# Mac OS X 10.7 Lion
+function make_osx_10_7 {
+
+    # Save final image
+    echo "Saving final image..."
+    hdiutil makehybrid "${IESD}" -o "${IMAGE}.iso" -hfs -iso -quiet
+
+    # Rename target
+    mv "${IMAGE}.iso" "${DEST}/${DEST_NAME}"
+
+}
+
+# OS X 10.8 Mountain Lion
+function make_osx_10_8 {
+
+    # Same as Mac OS X 10.7 Lion
+    make_osx_10_7
+
+}
+
+# OS X 10.9 Mavericks
+function make_osx_10_9 {
+
+    # Attach source
+    hdiutil attach "${IESD}" -mountpoint "${IESD_MOUNT}" -nobrowse -quiet
+
+    # Create temporary image
+    echo "Creating temporary image..."
+    hdiutil convert "${IESD_MOUNT}/BaseSystem.dmg" -o "${IMAGE}.sparsebundle" -format UDSB -quiet
+    hdiutil resize "${IMAGE}.sparsebundle" -size 6g -quiet
+    hdiutil attach "${IMAGE}.sparsebundle" -mountpoint "${IMAGE_MOUNT}" -owners on -nobrowse -quiet
+
+    # Copy system packages
+    echo "Copying system packages..."
+    rm "${IMAGE_MOUNT}/System/Installation/Packages"
+    ditto "${IESD_MOUNT}/Packages" "${IMAGE_MOUNT}/System/Installation/Packages"
+
+    # Eject source volumes
+    hdiutil detach "${IESD_MOUNT}" -quiet
+    hdiutil detach "${IMAGE_MOUNT}" -quiet
+
+    # Shrink
+    echo "Shrinking image..."
+    hdiutil resize -quiet -size min "${IMAGE}.sparsebundle"
+
+    # Save final image
+    echo "Saving final image..."
+    hdiutil makehybrid "${IMAGE}.sparsebundle" -o "${IMAGE}.iso" -hfs -iso -quiet
+
+    # Rename target
+    mv "${IMAGE}.iso" "${DEST}/${DEST_NAME}"
+
+}
+
+# OS X 10.10 Yosemite
+function make_osx_10_10 {
+
+    # Attach source
+    hdiutil attach "${IESD}" -mountpoint "${IESD_MOUNT}" -nobrowse -quiet
+
+    # Create temporary image
+    echo "Creating temporary image..."
+    hdiutil convert "${IESD_MOUNT}/BaseSystem.dmg" -o "${IMAGE}.sparsebundle" -format UDSB -quiet
+    hdiutil resize "${IMAGE}.sparsebundle" -size 8g -quiet
+    hdiutil attach "${IMAGE}.sparsebundle" -mountpoint "${IMAGE_MOUNT}" -owners on -nobrowse -quiet
+
+    # Copy system packages
+    echo "Copying system packages..."
+    rm "${IMAGE_MOUNT}/System/Installation/Packages"
+    ditto "${IESD_MOUNT}/Packages" "${IMAGE_MOUNT}/System/Installation/Packages"
+    ditto "${IESD_MOUNT}/BaseSystem.chunklist" "${IMAGE_MOUNT}/BaseSystem.chunklist"
+    ditto "${IESD_MOUNT}/BaseSystem.dmg" "${IMAGE_MOUNT}/BaseSystem.dmg"
+
+    # Eject source volumes
+    hdiutil detach "${IESD_MOUNT}" -quiet
+    hdiutil detach "${IMAGE_MOUNT}" -quiet
+
+    # Shrink
+    echo "Shrinking image..."
+    hdiutil resize -quiet -size min "${IMAGE}.sparsebundle"
+
+    # Save final image
+    echo "Saving final image..."
+    hdiutil makehybrid "${IMAGE}.sparsebundle" -o "${IMAGE}.iso" -hfs -iso -quiet
+
+    # Rename target
+    mv "${IMAGE}.iso" "${DEST}/${DEST_NAME}"
+
+}
+
+# OS X 10.11 El Capitan
+function make_osx_10_11 {
+
+    # Same as OS X 10.10 Yosemite
+    make_osx_10_10
+
 }
 
 # Super user only, except when printing help or version information
@@ -230,108 +331,6 @@ VERSION_BUNDLE_NAME=""
 VERSION_NAME=""
 VERSION_BUILD=""
 VERSION_PRETTY=""
-
-# Mac OS X 10.7 Lion
-function make_osx_10_7 {
-
-    # Save final image
-    echo "Saving final image..."
-    hdiutil makehybrid "${IESD}" -o "${IMAGE}.iso" -hfs -iso -quiet
-
-    # Rename target
-    mv "${IMAGE}.iso" "${DEST}/${DEST_NAME}"
-
-}
-
-# OS X 10.8 Mountain Lion
-function make_osx_10_8 {
-
-    # Save final image
-    echo "Saving final image..."
-    hdiutil makehybrid "${IESD}" -o "${IMAGE}.iso" -hfs -iso -quiet
-
-    # Rename target
-    mv "${IMAGE}.iso" "${DEST}/${DEST_NAME}"
-
-}
-
-# OS X 10.9 Mavericks
-function make_osx_10_9 {
-
-    # Attach source
-    hdiutil attach "${IESD}" -mountpoint "${IESD_MOUNT}" -nobrowse -quiet
-
-    # Create temporary image
-    echo "Creating temporary image..."
-    hdiutil convert "${IESD_MOUNT}/BaseSystem.dmg" -o "${IMAGE}.sparsebundle" -format UDSB -quiet
-    hdiutil resize "${IMAGE}.sparsebundle" -size 6g -quiet
-    hdiutil attach "${IMAGE}.sparsebundle" -mountpoint "${IMAGE_MOUNT}" -owners on -nobrowse -quiet
-
-    # Copy system packages
-    echo "Copying system packages..."
-    rm "${IMAGE_MOUNT}/System/Installation/Packages"
-    ditto "${IESD_MOUNT}/Packages" "${IMAGE_MOUNT}/System/Installation/Packages"
-
-    # Eject source volumes
-    hdiutil detach "${IESD_MOUNT}" -quiet
-    hdiutil detach "${IMAGE_MOUNT}" -quiet
-
-    # Shrink
-    echo "Shrinking image..."
-    hdiutil resize -quiet -size min "${IMAGE}.sparsebundle"
-
-    # Save final image
-    echo "Saving final image..."
-    hdiutil makehybrid "${IMAGE}.sparsebundle" -o "${IMAGE}.iso" -hfs -iso -quiet
-
-    # Rename target
-    mv "${IMAGE}.iso" "${DEST}/${DEST_NAME}"
-
-}
-
-# OS X 10.10 Yosemite
-function make_osx_10_10 {
-
-    # Attach source
-    hdiutil attach "${IESD}" -mountpoint "${IESD_MOUNT}" -nobrowse -quiet
-
-    # Create temporary image
-    echo "Creating temporary image..."
-    hdiutil convert "${IESD_MOUNT}/BaseSystem.dmg" -o "${IMAGE}.sparsebundle" -format UDSB -quiet
-    hdiutil resize "${IMAGE}.sparsebundle" -size 8g -quiet
-    hdiutil attach "${IMAGE}.sparsebundle" -mountpoint "${IMAGE_MOUNT}" -owners on -nobrowse -quiet
-
-    # Copy system packages
-    echo "Copying system packages..."
-    rm "${IMAGE_MOUNT}/System/Installation/Packages"
-    ditto "${IESD_MOUNT}/Packages" "${IMAGE_MOUNT}/System/Installation/Packages"
-    ditto "${IESD_MOUNT}/BaseSystem.chunklist" "${IMAGE_MOUNT}/BaseSystem.chunklist"
-    ditto "${IESD_MOUNT}/BaseSystem.dmg" "${IMAGE_MOUNT}/BaseSystem.dmg"
-
-    # Eject source volumes
-    hdiutil detach "${IESD_MOUNT}" -quiet
-    hdiutil detach "${IMAGE_MOUNT}" -quiet
-
-    # Shrink
-    echo "Shrinking image..."
-    hdiutil resize -quiet -size min "${IMAGE}.sparsebundle"
-
-    # Save final image
-    echo "Saving final image..."
-    hdiutil makehybrid "${IMAGE}.sparsebundle" -o "${IMAGE}.iso" -hfs -iso -quiet
-
-    # Rename target
-    mv "${IMAGE}.iso" "${DEST}/${DEST_NAME}"
-
-}
-
-# OS X 10.11 El Capitan
-function make_osx_10_11 {
-
-    # Same as OS X 10.10 Yosemite
-    make_osx_10_10
-
-}
 
 # In case of fully operational battle station
 ackbar_on
