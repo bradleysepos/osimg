@@ -1,6 +1,12 @@
 #!/bin/bash
 # osximg - create bootable disk images from Mac OS X install files
 #
+# Version 0.9.0 (2015-07-13)
+# Consolidate error handling code and improve reporting. Prefer variable
+# substitution over assignment of default values. Fix output path in certain
+# scenarios. Fix permissions on created parent directories. Many miscellaneous
+# fixes and improvements.
+#
 # Version 0.8.1 (2015-07-12)
 # Add braces to all variables.
 #
@@ -52,14 +58,91 @@ where:
    -v  display version information
    -a  attach/mount final image when complete"
 VERSION="\
-osximg 0.8.1"
+osximg 0.9.0"
+
+# Cleans up temporary resources
+function clean_up {
+
+    # Run all commands despite non-zero exit codes
+    set +e
+
+    # Detach images used for version detection and remove mount points
+    if [[ "${BASE_MOUNT_TMP:-undefinedx}" != "undefinedx" ]] && [[ "${IESD_MOUNT_TMP:-undefinedx}" != "undefinedx" ]]; then
+        hdiutil detach "${BASE_MOUNT_TMP}" -force -quiet
+        hdiutil detach "${IESD_MOUNT_TMP}" -force -quiet
+        sleep 2
+        rm -rf "${BASE_MOUNT_TMP}" >/dev/null 2>&1
+        rm -rf "${IESD_MOUNT_TMP}" >/dev/null 2>&1
+    fi
+
+    # Remove destination (if zero bytes, to be safe) and lockfile
+    if [[ "${DEST:-undefinedx}" != "undefinedx" ]] && [[ "${DEST_NAME:-undefinedx}" != "undefinedx" ]]; then
+        if [[ "${DEST_FILE:-undefinedx}" == true ]] && [[ -f "${DEST}/${DEST_NAME}" ]] && [[ ! -s "${DEST}/${DEST_NAME}" ]]; then
+            rm -f "${DEST}/${DEST_NAME}" >/dev/null 2>&1
+        fi
+        if [[ "${DEST_LOCKFILE:-undefinedx}" == true ]] && [[ -f "${DEST}/${DEST_NAME}.lock" ]]; then
+            rm -f "${DEST}/${DEST_NAME}.lock" >/dev/null 2>&1
+        fi
+    fi
+
+    # Detach images used for image creation
+    if [[ "${BASE_MOUNT:-undefinedx}" != "undefinedx" ]] && [[ "${IESD_MOUNT:-undefinedx}" != "undefinedx" ]] && [[ "${IMAGE_MOUNT:-undefinedx}" != "undefinedx" ]]; then
+        hdiutil detach "${BASE_MOUNT}" -force -quiet
+        hdiutil detach "${IESD_MOUNT}" -force -quiet
+        hdiutil detach "${IMAGE_MOUNT}" -force -quiet
+        sleep 2
+    fi
+
+    # Remove temporary files
+    if [[ "${TEMP:-undefinedx}" != "undefinedx" ]]; then
+        if [[ -e "${TEMP}" ]]; then
+            rm -rf "${TEMP}" >/dev/null 2>&1
+        fi
+        if [[ -e "${TEMP}" ]]; then
+            # Try again
+            sleep 8
+            rm -rf "${TEMP}" >/dev/null 2>&1
+        fi
+    fi
+
+}
+
+# Cleans up on hard exit
+function exit_hard {
+    CODE="$?"
+    trap - EXIT INT TERM
+    if [[ "${CODE}" != "0" ]]; then
+        echo "Signal caught; terminating."
+    fi
+    clean_up
+    exit "${CODE}"
+}
+
+# It's a TRAP!
+function ackbar_on {
+    trap exit_hard EXIT INT TERM
+}
+function ackbar_off {
+    trap - EXIT INT TERM
+}
+
+# Logs error message and exits
+function exit_with_error {
+    ackbar_off
+    ERROR="${2}"
+    echo "${ERROR}" >&2 && syslog -s -l error "${ERROR}"
+    PRINT_HELP="${3:-false}"
+    if [[ "${PRINT_HELP}" == true ]]; then
+        echo -e "${HELP}"
+    fi
+    clean_up
+    exit "${1}"
+}
 
 # Super user only, except when printing help or version information
 SUID=$(id -u root)
 if [[ "${UID}" != "${SUID}" ]] && ( [[ "$#" -eq 0 ]] || grep -qv '^-\(h\|v\)' <<< "${1}" ); then
-    ERROR="${SELF_NAME}: must be run as root, e.g. sudo ${SELF_NAME}"
-    echo "${ERROR}" >&2 && syslog -s -l error "${ERROR}"
-    exit 1
+    exit_with_error 1 "${SELF_NAME}: must be run as root, e.g. sudo ${SELF_NAME}"
 fi
 
 # Arguments
@@ -85,17 +168,11 @@ while getopts ":ahv" OPT; do
             ;;
         :)
             # Option without required argument
-            ERROR="${SELF_NAME}: option -${OPTARG} requires a value"
-            echo "${ERROR}" >&2 && syslog -s -l error "${ERROR}"
-            echo -e "${HELP}"
-            exit 1
+            exit_with_error 1 "${SELF_NAME}: option -${OPTARG} requires a value" true
             ;;
         \?)
             # Invalid option specified
-            ERROR="${SELF_NAME}: invalid option: -${OPTARG}"
-            echo "${ERROR}" >&2 && syslog -s -l error "${ERROR}"
-            echo -e "${HELP}"
-            exit 1
+            exit_with_error 1 "${SELF_NAME}: invalid option: -${OPTARG}" true
             ;;
     esac
 done
@@ -112,24 +189,16 @@ set -u
 # Validate arguments count
 if [[ "$#" -gt 2 ]]; then
     # Too many arguments
-    ERROR="${SELF_NAME}: too many arguments"
-    echo "${ERROR}" >&2 && syslog -s -l error "${ERROR}"
-    echo -e "${HELP}"
-    exit 1
+    exit_with_error 1 "${SELF_NAME}: too many arguments" true
 fi
 
 # Validate source path
 if [[ "${SOURCE}" == "" ]]; then
     # Source path not specified
-    ERROR="${SELF_NAME}: source path not specified"
-    echo "${ERROR}" >&2 && syslog -s -l error "${ERROR}"
-    echo -e "${HELP}"
-    exit 1
+    exit_with_error 1 "${SELF_NAME}: source path not specified" true
 elif [[ ! -e "${SOURCE}" ]]; then
     # Source path does not exist
-    ERROR="${SELF_NAME}: source path does not exist: ${SOURCE}"
-    echo "${ERROR}" >&2 && syslog -s -l error "${ERROR}"
-    exit 1
+    exit_with_error 1 "${SELF_NAME}: source path does not exist: ${SOURCE}"
 fi
 
 # Validate source is or contains a disk image
@@ -141,111 +210,26 @@ elif hdiutil imageinfo -format "${SOURCE}/Contents/SharedSupport/InstallESD.dmg"
     IESD="${SOURCE}/Contents/SharedSupport/InstallESD.dmg"
 else
     # Unable to locate an installer image
-    ERROR="${SELF_NAME}: unable to locate an installer image"
-    echo "${ERROR}" >&2 && syslog -s -l error "${ERROR}"
-    exit 1
+    exit_with_error 1 "${SELF_NAME}: unable to locate an installer image"
 fi
 
 # Validate destination path
 if [[ "${DEST}" != "" ]] && [[ -e "${DEST}" ]] && [[ ! -d "${DEST}" ]]; then
     # Destination file already exists
-    ERROR="${SELF_NAME}: destination file already exists: ${DEST}"
-    echo "${ERROR}" >&2 && syslog -s -l error "${ERROR}"
-    exit 1
+    exit_with_error 1 "${SELF_NAME}: destination file already exists: ${DEST}"
 fi
 
-# Creates temporary files
-function make_temp {
-
-    if ! lockfile -1 -r 1 "${DEST}/${DEST_NAME}.lock" >/dev/null 2>&1; then
-        # Unable to create lockfile
-        ERROR="${SELF_NAME}: unable to create lockfile"
-        echo "${ERROR}" >&2 && syslog -s -l error "${ERROR}"
-        exit 1
-    fi
-    DEST_LOCKFILE=true
-    if [[ ! -e "${DEST}/${DEST_NAME}" ]]; then
-        touch "${DEST}/${DEST_NAME}"
-    else
-        # Destination path already exists
-        ERROR="${SELF_NAME}: Destination path already exists: ${DEST}/${DEST_NAME}"
-        echo "${ERROR}" >&2 && syslog -s -l error "${ERROR}"
-        exit 1
-    fi
-    TEMP=$(mktemp -d "${DEST}/${DEST_NAME}.XXXXXX")
-
-}
-
-# Removes temporary files
-function remove_temp {
-
-    # Run all commands despite non-zero exit codes
-    set +e
-
-    # Detach images used for version detection and remove mount points
-    if [[ "${BASE_MOUNT_TMP:=undefinedx}" != "undefinedx" ]] && [[ "${IESD_MOUNT_TMP:=undefinedx}" != "undefinedx" ]]; then
-        hdiutil detach "${BASE_MOUNT_TMP}" -force -quiet
-        hdiutil detach "${IESD_MOUNT_TMP}" -force -quiet
-        sleep 2
-        rm -rf "${BASE_MOUNT_TMP}" >/dev/null 2>&1
-        rm -rf "${IESD_MOUNT_TMP}" >/dev/null 2>&1
-    fi
-
-    # Remove destination (if zero bytes) and lockfile
-    if [[ "${DEST:=undefinedx}" != "undefinedx" ]] && [[ "${DEST_NAME:=undefinedx}" != "undefinedx" ]]; then
-        if [[ -f "${DEST}/${DEST_NAME}" ]] && [[ ! -s "${DEST}/${DEST_NAME}" ]]; then
-            rm -f "${DEST}/${DEST_NAME}" >/dev/null 2>&1
-        fi
-        if [[ "${DEST_LOCKFILE}" == true ]] && [[ -f "${DEST}/${DEST_NAME}.lock" ]]; then
-            rm -f "${DEST}/${DEST_NAME}.lock" >/dev/null 2>&1
-        fi
-
-    fi
-
-    # Detach images used for image creation
-    if [[ "${BASE_MOUNT:=undefinedx}" != "undefinedx" ]] && [[ "${IESD_MOUNT:=undefinedx}" != "undefinedx" ]] && [[ "${IMAGE_MOUNT:=undefinedx}" != "undefinedx" ]]; then
-        hdiutil detach "${BASE_MOUNT}" -force -quiet
-        hdiutil detach "${IESD_MOUNT}" -force -quiet
-        hdiutil detach "${IMAGE_MOUNT}" -force -quiet
-        sleep 2
-    fi
-
-    # Remove temporary files
-    if [[ "${TEMP:=undefinedx}" != "undefinedx" ]]; then
-        if [[ -e "${TEMP}" ]]; then
-            rm -rf "${TEMP}" >/dev/null 2>&1
-        fi
-        if [[ -e "${TEMP}" ]]; then
-            # Try again
-            sleep 8
-            rm -rf "${TEMP}" >/dev/null 2>&1
-        fi
-        if [[ -e "${TEMP}" ]]; then
-            # Unable to remove all temporary files
-            TEMP_ABS_PATH=$(ruby -e "puts File.expand_path(\"${TEMP}\")")
-            ERROR="${SELF_NAME}: some files could not be removed at path: ${TEMP_ABS_PATH}"
-            echo "${ERROR}" >&2 && syslog -s -l error "${ERROR}"
-            exit 1
-        fi
-    fi
-
-}
-
-# Cleans up on hard exit
-function yolo {
-    trap - EXIT INT TERM
-    echo "Signal caught; terminating."
-    remove_temp
-    exit 1
-}
-
-# It's a TRAP!
-function akbar_on {
-    trap yolo EXIT INT TERM
-}
-function akbar_off {
-    trap - EXIT INT TERM
-}
+# Internal vars
+DEST_LOCKFILE=false
+DEST_FILE=false
+DEST_MKDIR=false
+VERSION_PREFIX=""
+VERSION_ARRAY=("" "" "" "")
+VERSION=""
+VERSION_BUNDLE_NAME=""
+VERSION_NAME=""
+VERSION_BUILD=""
+VERSION_PRETTY=""
 
 # Mac OS X 10.7 Lion
 function make_osx_10_7 {
@@ -350,16 +334,9 @@ function make_osx_10_11 {
 }
 
 # In case of fully operational battle station
-akbar_on
+ackbar_on
 
 # Detect and validate source version
-VERSION_PREFIX="OS X"
-VERSION_ARRAY=("" "" "" "")
-VERSION=""
-VERSION_BUNDLE_NAME=""
-VERSION_NAME=""
-VERSION_BUILD=""
-VERSION_PRETTY=""
 IESD_MOUNT_TMP=$(mktemp -d "/tmp/osximg-installesd-XXXXXX")
 BASE_MOUNT_TMP=$(mktemp -d "/tmp/osximg-basesystem-XXXXXX")
 if hdiutil attach "${IESD}" -mountpoint "${IESD_MOUNT_TMP}" -nobrowse -noverify -quiet; then
@@ -370,16 +347,12 @@ if hdiutil attach "${IESD}" -mountpoint "${IESD_MOUNT_TMP}" -nobrowse -noverify 
         hdiutil detach "${BASE_MOUNT_TMP}" -quiet
     else
         # Unable to mount base system image
-        ERROR="${SELF_NAME}: unable to mount base system image"
-        echo "${ERROR}" >&2 && syslog -s -l error "${ERROR}"
-        exit 1
+        exit_with_error 1 "${SELF_NAME}: unable to mount base system image"
     fi
     hdiutil detach "${IESD_MOUNT_TMP}" -quiet
 else
     # Unable to mount source image
-    ERROR="${SELF_NAME}: unable to mount source image"
-    echo "${ERROR}" >&2 && syslog -s -l error "${ERROR}"
-    exit 1
+    exit_with_error 1 "${SELF_NAME}: unable to mount source image"
 fi
 rm -rf "${BASE_MOUNT_TMP}"
 rm -rf "${IESD_MOUNT_TMP}"
@@ -393,32 +366,79 @@ if [[ "${VERSION_ARRAY[0]}" -eq "10" ]] && [[ "${VERSION_ARRAY[1]}" -gt "6" ]] &
     VERSION_PRETTY="${VERSION_PREFIX} ${VERSION} ${VERSION_NAME} (${VERSION_BUILD})"
     echo "${VERSION_PRETTY}"
     if [[ "${DEST}" == "" ]]; then
-        akbar_off
+        ackbar_off # No clean up should be necessary at this point
         exit 0
     fi
 else
     # Source invalid or version not supported
-    ERROR="${SELF_NAME}: source invalid or version not supported: ${VERSION}"
-    echo "${ERROR}" >&2 && syslog -s -l error "${ERROR}"
-    exit 1
+    exit_with_error 1 "${SELF_NAME}: source invalid or version not supported: ${VERSION}"
 fi
 
-# Destination
-if [[ -d "${DEST}" ]] || [[ "$((${#DEST}-1))" == "/" ]]; then
-    # User specified a directory
+# Translate specified destination
+if [[ -d "${DEST}" ]] || [[ "${DEST:$((${#DEST}-1)):1}" == "/" ]]; then
+    # Directory specified
     DEST_NAME="${VERSION_PRETTY}.iso"
-    DEST=${DEST%/} # Drop trailing slash
+    DEST="${DEST%/}" # Drop trailing slash
 else
-    # User specified a file
-    DEST_NAME=${DEST##*/} # Filename
-    DEST=${DEST%/*}       # Directory without trailing slash
+    # File specified
+    DEST_NAME="${DEST##*/}" # Filename
+    if [[ "${DEST}" == "${DEST_NAME}" ]]; then
+        # No directory specified
+        DEST="."
+    else
+        DEST="${DEST%/*}" # Directory without trailing slash
+    fi
 fi
-mkdir -p "${DEST}"
 
-# Make temporary directory
-make_temp
+# Create destination
+if [[ ! -e "${DEST}/${DEST_NAME}" ]]; then
 
-# Temporary file paths
+    # Create destination directory
+    if [[ ! -e "${DEST}" ]]; then
+        # Split destination path into array of incremental directories
+        IFS='/' read -ra DEST_ARRAY <<< "${DEST}"
+        if [[ "${#DEST_ARRAY[@]}" -gt 1 ]]; then
+            for I in $(seq 1 $((${#DEST_ARRAY[@]} - 1))); do
+                DEST_ARRAY[I]="${DEST_ARRAY[$((${I} - 1))]}/${DEST_ARRAY[I]}"
+            done
+        fi
+        # Create nonexistent directories one level at a time
+        for D in ${DEST_ARRAY[@]}; do
+            if [[ ! -e "${D}" ]]; then
+                if mkdir "${D}" >/dev/null 2>&1; then
+                    # Set directory owner to invoker
+                    chown -f $(who am i | awk '{ print $1 }') "${D}" >/dev/null 2>&1
+                else
+                    # Unable to create destination directory
+                    exit_with_error 1 "${SELF_NAME}: unable to create destination directory: ${DEST}"
+                fi
+            fi
+        done
+    fi
+
+    # Create lockfile
+    if [[ ! -e "${DEST}/${DEST_NAME}.lock" ]] && lockfile -1 -r 1 "${DEST}/${DEST_NAME}.lock" >/dev/null 2>&1; then
+        DEST_LOCKFILE=true
+    else
+        # Unable to create lockfile
+        exit_with_error 1 "${SELF_NAME}: unable to create lockfile"
+    fi
+
+    # Create destination file
+    if [[ ! -e "${DEST}/${DEST_NAME}" ]] && touch "${DEST}/${DEST_NAME}" >/dev/null 2>&1; then
+        DEST_FILE=true
+    else
+        # Unable to create destination file
+        exit_with_error 1 "${SELF_NAME}: unable to create destination file"
+    fi
+
+else
+    # Destination already exists
+    exit_with_error 1 "${SELF_NAME}: destination already exists: ${DEST}/${DEST_NAME}"
+fi
+
+# Create temporary resources
+TEMP=$(mktemp -d "${DEST}/${DEST_NAME}.XXXXXX")
 IMAGE="${TEMP}/osximg-temp"
 IMAGE_MOUNT="${TEMP}/osximg-temp.mount"
 IESD_MOUNT="${TEMP}/osximg-installesd.mount"
@@ -427,8 +447,8 @@ BASE_MOUNT="${TEMP}/osximg-basesystem.mount"
 # Build image
 make_osx_"${VERSION_ARRAY[0]}"_"${VERSION_ARRAY[1]}"
 
-# Updating permissions
-echo "Updating permissions..."
+# Update ownership
+echo "Updating ownership..."
 chown -f $(who am i | awk '{ print $1 }') "${DEST}/${DEST_NAME}" >/dev/null 2>&1
 
 # Attach final image
@@ -438,9 +458,9 @@ if $ATTACH; then
 fi
 
 # Remove temporary files
-akbar_off
+ackbar_off
 echo "Cleaning up..."
-remove_temp
+clean_up
 
 # Done
 echo "Done."
