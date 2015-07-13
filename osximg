@@ -1,6 +1,11 @@
 #!/bin/bash
 # osximg - create bootable disk images from Mac OS X install files
 #
+# Version 0.8.0 (2015-07-12)
+# Detect common name and pretty format the version string. Remove wrapper
+# function and improve signal handling. Make lockfile creation/deletion more
+# robust. Fix attach. Refactor.
+#
 # Version 0.7.0 (2015-07-12)
 # Add support for El Capitan public beta. Remove -f and Apple createinstallmedia
 # method. Detect and print source version. Remove -o in favor of optional second
@@ -31,372 +36,409 @@
 # Version 0.1.0 (2014-04-25)
 # Initial development. Mavericks supported.
 
-osximg() {
+set -e
+set -u
 
-    set -e
-    set -u
+SELF="$0"
+SELF_NAME=$(basename "$SELF")
+HELP="\
+usage: $SELF_NAME [-hv]
+       $SELF_NAME [-a] source [destination]
+where:
+   -h  display this help text
+   -v  display version information
+   -a  attach/mount final image when complete"
+VERSION="\
+osximg 0.8.0"
 
-    SELF="$0"
-    SELF_NAME=$(basename "$SELF")
-    HELP="\
-    usage: $SELF_NAME [-hv]
-           $SELF_NAME [-a] source [destination]
-    where:
-       -h  display this help text
-       -v  display version information
-       -a  attach/mount final image when complete"
-    VERSION="\
-    osximg 0.7.0"
+# Super user only, except when printing help or version information
+SUID=$(id -u root)
+if [[ "$UID" != "$SUID" ]] && ( [[ "$#" -eq 0 ]] || grep -qv '^-\(h\|v\)' <<< "$1" ); then
+    ERROR="$SELF_NAME: must be run as root, e.g. sudo $SELF_NAME"
+    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+    exit 1
+fi
 
-    # Super user only, except when printing help or version information
-    SUID=$(id -u root)
-    if [[ "$UID" != "$SUID" ]] && ( [[ "$#" -eq 0 ]] || grep -qv '^-\(h\|v\)' <<< "$1" ); then
-        ERROR="$SELF_NAME: must be run as root, e.g. sudo $SELF_NAME"
-        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-        exit 1
-    fi
-
-    # Arguments
-    ATTACH=false
-    DEST=""
-    SOURCE=""
-    OPTIND=1
-    while getopts ":ahv" OPT; do
-        case "${OPT}" in
-            a)
-                # Attach
-                ATTACH=true
-                ;;
-            h)
-                # Print help and exit
-                echo -e "$HELP"
-                exit 0
-                ;;
-            v)
-                # Print version and exit
-                echo -e "$VERSION"
-                exit 0
-                ;;
-            :)
-                # Option without required argument
-                ERROR="$SELF_NAME: option -$OPTARG requires a value"
-                echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-                echo -e "$HELP"
-                exit 1
-                ;;
-            \?)
-                # Invalid option specified
-                ERROR="$SELF_NAME: invalid option: -$OPTARG"
-                echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-                echo -e "$HELP"
-                exit 1
-                ;;
-        esac
-    done
-    shift $(($OPTIND - 1))
-    set +u
-    if [[ -n ${1} ]]; then
-        SOURCE="${1}"
-    fi
-    if [[ -n ${2} ]]; then
-        DEST="${2}"
-    fi
-    set -u
-
-    # Validate arguments count
-    if [[ "$#" -gt 2 ]]; then
-        # Too many arguments
-        ERROR="$SELF_NAME: too many arguments"
-        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-        echo -e "$HELP"
-        exit 1
-    fi
-
-    # Validate source path
-    if [[ "$SOURCE" == "" ]]; then
-        # Source path not specified
-        ERROR="$SELF_NAME: source path not specified"
-        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-        echo -e "$HELP"
-        exit 1
-    elif [[ ! -e "$SOURCE" ]]; then
-        # Source path does not exist
-        ERROR="$SELF_NAME: source path does not exist: $SOURCE"
-        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-        exit 1
-    fi
-
-    # Validate source is or contains a disk image
-    if hdiutil imageinfo -format "$SOURCE" >/dev/null 2>&1; then
-        # Source is a disk image
-        IESD="$SOURCE"
-    elif hdiutil imageinfo -format "$SOURCE/Contents/SharedSupport/InstallESD.dmg" >/dev/null 2>&1; then
-        # Source is an app bundle, disk image found inside
-        IESD="$SOURCE/Contents/SharedSupport/InstallESD.dmg"
-    else
-        # Unable to locate a valid disk image
-        ERROR="$SELF_NAME: unable to locate a valid disk image"
-        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-        exit 1
-    fi
-
-    # Validate destination path
-    if [[ "$DEST" != "" ]] && [[ -e "$DEST" ]] && [[ ! -d "$DEST" ]]; then
-        # Destination file already exists
-        ERROR="$SELF_NAME: destination file already exists: $DEST"
-        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-        exit 1
-    fi
-
-    # Creates temporary files
-    function make_temp {
-
-        if ! lockfile -1 -r 1 "$DEST/$DEST_NAME.lock" >/dev/null 2>&1; then
-            # Unable to create lockfile
-            ERROR="$SELF_NAME: unable to create lockfile"
-            echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-            exit 1
-        fi
-        if [[ ! -e "$DEST/$DEST_NAME" ]]; then
-            touch "$DEST/$DEST_NAME"
-        else
-            # Destination path already exists
-            ERROR="$SELF_NAME: Destination path already exists: $DEST/$DEST_NAME"
-            echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-            exit 1
-        fi
-        TEMP=$(mktemp -d "$DEST/$DEST_NAME.XXXXXX")
-
-    }
-
-    # Removes temporary files
-    function remove_temp {
-
-        # Unmount all temporary file systems and remove temporary files
-        if [[ "$TEMP" != "" ]] && [[ -e "$TEMP" ]]; then
-
-            # Run all commands despite non-zero exit codes
-            set +e
-
-            # Remove destination if zero bytes
-            if [[ ! -s "$DEST/$DEST_NAME" ]]; then
-                rm -f "$DEST/$DEST_NAME"
-            fi
-
-            # Remove lockfile
-            rm -f "$DEST/$DEST_NAME.lock"
-
-            # Detach images
-            hdiutil detach "$BASE_MOUNT" -force -quiet
-            hdiutil detach "$IESD_MOUNT" -force -quiet
-            hdiutil detach "$IMAGE_MOUNT" -force -quiet
-            sleep 2
-
-            # Remove temporary files
-            rm -rf "$TEMP" >/dev/null 2>&1
-            if [[ -e "$TEMP" ]]; then
-                # Try again
-                sleep 8
-                rm -rf "$TEMP" >/dev/null 2>&1
-            fi
-            if [[ -e "$TEMP" ]]; then
-                # Unable to remove all temporary files
-                TEMP_ABS_PATH=$(ruby -e "puts File.expand_path(\"$TEMP\")")
-                ERROR="$SELF_NAME: some files could not be removed at path: $TEMP_ABS_PATH"
-                echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
-                exit 1
-            fi
-
-        fi
-
-    }
-
-    # Mac OS X 10.7 Lion
-    function make_osx_10_7 {
-
-        # Save final image
-        echo "Saving final image..."
-        hdiutil makehybrid "$IESD" -o "$IMAGE.iso" -hfs -iso -quiet
-
-        # Rename target
-        mv "$IMAGE.iso" "$DEST/$DEST_NAME"
-
-    }
-
-    # OS X 10.8 Mountain Lion
-    function make_osx_10_8 {
-
-        # Save final image
-        echo "Saving final image..."
-        hdiutil makehybrid "$IESD" -o "$IMAGE.iso" -hfs -iso -quiet
-
-        # Rename target
-        mv "$IMAGE.iso" "$DEST/$DEST_NAME"
-
-    }
-
-    # OS X 10.9 Mavericks
-    function make_osx_10_9 {
-
-        # Attach source
-        hdiutil attach "$IESD" -mountpoint "$IESD_MOUNT" -nobrowse -quiet
-
-        # Create temporary image
-        echo "Creating temporary image..."
-        hdiutil convert "$IESD_MOUNT/BaseSystem.dmg" -o "$IMAGE.sparsebundle" -format UDSB -quiet
-        hdiutil resize "$IMAGE.sparsebundle" -size 6g -quiet
-        hdiutil attach "$IMAGE.sparsebundle" -mountpoint "$IMAGE_MOUNT" -owners on -nobrowse -quiet
-
-        # Copy system packages
-        echo "Copying system packages..."
-        rm "$IMAGE_MOUNT/System/Installation/Packages"
-        ditto "$IESD_MOUNT/Packages" "$IMAGE_MOUNT/System/Installation/Packages"
-
-        # Eject source volumes
-        hdiutil detach "$IESD_MOUNT" -quiet
-        hdiutil detach "$IMAGE_MOUNT" -quiet
-
-        # Shrink
-        echo "Shrinking image..."
-        hdiutil resize -quiet -size min "$IMAGE.sparsebundle"
-
-        # Save final image
-        echo "Saving final image..."
-        hdiutil makehybrid "$IMAGE.sparsebundle" -o "$IMAGE.iso" -hfs -iso -quiet
-
-        # Rename target
-        mv "$IMAGE.iso" "$DEST/$DEST_NAME"
-
-    }
-
-    # OS X 10.10 Yosemite
-    function make_osx_10_10 {
-
-        # Attach source
-        hdiutil attach "$IESD" -mountpoint "$IESD_MOUNT" -nobrowse -quiet
-
-        # Create temporary image
-        echo "Creating temporary image..."
-        hdiutil convert "$IESD_MOUNT/BaseSystem.dmg" -o "$IMAGE.sparsebundle" -format UDSB -quiet
-        hdiutil resize "$IMAGE.sparsebundle" -size 8g -quiet
-        hdiutil attach "$IMAGE.sparsebundle" -mountpoint "$IMAGE_MOUNT" -owners on -nobrowse -quiet
-
-        # Copy system packages
-        echo "Copying system packages..."
-        rm "$IMAGE_MOUNT/System/Installation/Packages"
-        ditto "$IESD_MOUNT/Packages" "$IMAGE_MOUNT/System/Installation/Packages"
-        ditto "$IESD_MOUNT/BaseSystem.chunklist" "$IMAGE_MOUNT/BaseSystem.chunklist"
-        ditto "$IESD_MOUNT/BaseSystem.dmg" "$IMAGE_MOUNT/BaseSystem.dmg"
-
-        # Eject source volumes
-        hdiutil detach "$IESD_MOUNT" -quiet
-        hdiutil detach "$IMAGE_MOUNT" -quiet
-
-        # Shrink
-        echo "Shrinking image..."
-        hdiutil resize -quiet -size min "$IMAGE.sparsebundle"
-
-        # Save final image
-        echo "Saving final image..."
-        hdiutil makehybrid "$IMAGE.sparsebundle" -o "$IMAGE.iso" -hfs -iso -quiet
-
-        # Rename target
-        mv "$IMAGE.iso" "$DEST/$DEST_NAME"
-
-    }
-    
-    # OS X 10.11 El Capitan
-    function make_osx_10_11 {
-
-        # Same as OS X 10.10 Yosemite
-        make_osx_10_10
-
-    }
-
-    # Detect source version
-    if [[ "$DEST" != "" ]]; then
-        echo "Validating source version..."
-    fi
-    OSX_VERS=("" "" "" "")
-    IESD_MOUNT_TMP=$(mktemp -d "/tmp/osximg-installesd-XXXXXX")
-    BASE_MOUNT_TMP=$(mktemp -d "/tmp/osximg-basesystem-XXXXXX")
-    if hdiutil attach "$IESD" -mountpoint "$IESD_MOUNT_TMP" -nobrowse -quiet; then
-        if hdiutil attach "$IESD_MOUNT_TMP/BaseSystem.dmg" -mountpoint "$BASE_MOUNT_TMP" -nobrowse -quiet; then
-            OSX_VERS_TEMP=$(/usr/libexec/PlistBuddy -c 'Print :ProductVersion' "$BASE_MOUNT_TMP/System/Library/CoreServices/SystemVersion.plist")
-            while read MAJOR MINOR PATCH; do
-                OSX_VERS=("${MAJOR}" "${MINOR}" "${PATCH}")
-            done <<< $(echo "${OSX_VERS_TEMP}" | awk -F "." '{ print $1 " " $2 " " $3 }')
-            OSX_VERS[3]=$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' "$BASE_MOUNT_TMP/System/Library/CoreServices/SystemVersion.plist")
-            hdiutil detach "$BASE_MOUNT_TMP" -quiet
-        fi
-        hdiutil detach "$IESD_MOUNT_TMP" -quiet
-    fi
-    rm -rf "$BASE_MOUNT_TMP"
-    rm -rf "$IESD_MOUNT_TMP"
-
-    # Validate version
-    if [[ "${OSX_VERS[0]}" -eq "10" ]] && [[ "${OSX_VERS[1]}" -gt "6" ]] && [[ "${OSX_VERS[1]}" -lt "12" ]]; then
-        # Source version appears to be valid
-        if [[ "${OSX_VERS[2]}" == "" ]]; then
-            OSX_VERS[2]="0"
-        fi
-        echo "OS X ${OSX_VERS[0]}.${OSX_VERS[1]}.${OSX_VERS[2]} Build ${OSX_VERS[3]}"
-        if [[ "$DEST" == "" ]]; then
+# Arguments
+ATTACH=false
+DEST=""
+SOURCE=""
+OPTIND=1
+while getopts ":ahv" OPT; do
+    case "${OPT}" in
+        a)
+            # Attach
+            ATTACH=true
+            ;;
+        h)
+            # Print help and exit
+            echo -e "$HELP"
             exit 0
-        fi
-    else
-        # Source invalid or version not supported
-        ERROR="$SELF_NAME: source invalid or version not supported: ${OSX_VERS[0]}.${OSX_VERS[1]}.${OSX_VERS[2]}"
+            ;;
+        v)
+            # Print version and exit
+            echo -e "$VERSION"
+            exit 0
+            ;;
+        :)
+            # Option without required argument
+            ERROR="$SELF_NAME: option -$OPTARG requires a value"
+            echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+            echo -e "$HELP"
+            exit 1
+            ;;
+        \?)
+            # Invalid option specified
+            ERROR="$SELF_NAME: invalid option: -$OPTARG"
+            echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+            echo -e "$HELP"
+            exit 1
+            ;;
+    esac
+done
+shift $(($OPTIND - 1))
+set +u
+if [[ -n ${1} ]]; then
+    SOURCE="${1}"
+fi
+if [[ -n ${2} ]]; then
+    DEST="${2}"
+fi
+set -u
+
+# Validate arguments count
+if [[ "$#" -gt 2 ]]; then
+    # Too many arguments
+    ERROR="$SELF_NAME: too many arguments"
+    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+    echo -e "$HELP"
+    exit 1
+fi
+
+# Validate source path
+if [[ "$SOURCE" == "" ]]; then
+    # Source path not specified
+    ERROR="$SELF_NAME: source path not specified"
+    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+    echo -e "$HELP"
+    exit 1
+elif [[ ! -e "$SOURCE" ]]; then
+    # Source path does not exist
+    ERROR="$SELF_NAME: source path does not exist: $SOURCE"
+    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+    exit 1
+fi
+
+# Validate source is or contains a disk image
+if hdiutil imageinfo -format "$SOURCE" >/dev/null 2>&1; then
+    # Source is a disk image
+    IESD="$SOURCE"
+elif hdiutil imageinfo -format "$SOURCE/Contents/SharedSupport/InstallESD.dmg" >/dev/null 2>&1; then
+    # Source is an app bundle, disk image found inside
+    IESD="$SOURCE/Contents/SharedSupport/InstallESD.dmg"
+else
+    # Unable to locate an installer image
+    ERROR="$SELF_NAME: unable to locate an installer image"
+    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+    exit 1
+fi
+
+# Validate destination path
+if [[ "$DEST" != "" ]] && [[ -e "$DEST" ]] && [[ ! -d "$DEST" ]]; then
+    # Destination file already exists
+    ERROR="$SELF_NAME: destination file already exists: $DEST"
+    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+    exit 1
+fi
+
+# Creates temporary files
+function make_temp {
+
+    if ! lockfile -1 -r 1 "$DEST/$DEST_NAME.lock" >/dev/null 2>&1; then
+        # Unable to create lockfile
+        ERROR="$SELF_NAME: unable to create lockfile"
         echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
         exit 1
     fi
-
-    # Destination
-    if [[ "$DEST" != "" ]]; then
-        if [[ -d "${DEST}" ]] || [[ "$((${#DEST}-1))" == "/" ]]; then
-            # Directory
-            DEST_NAME="OSX_${OSX_VERS[0]}.${OSX_VERS[1]}.${OSX_VERS[2]}_${OSX_VERS[3]}.iso"
-            DEST=${DEST%/} # Drop trailing slash
-        else
-            # File
-            DEST_NAME=${DEST##*/} # Filename provided by user
-            DEST=${DEST%/*}       # Drop trailing slash
-        fi
+    DEST_LOCKFILE=true
+    if [[ ! -e "$DEST/$DEST_NAME" ]]; then
+        touch "$DEST/$DEST_NAME"
+    else
+        # Destination path already exists
+        ERROR="$SELF_NAME: Destination path already exists: $DEST/$DEST_NAME"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        exit 1
     fi
-    mkdir -p "${DEST}"
-
-    # Make temporary directory
-    make_temp
-    trap remove_temp EXIT
-
-    # Temporary file paths
-    IMAGE="$TEMP/osximg-temp"
-    IMAGE_MOUNT="$TEMP/osximg-temp.mount"
-    IESD_MOUNT="$TEMP/osximg-installesd.mount"
-    BASE_MOUNT="$TEMP/osximg-basesystem.mount"
-
-    # Build image
-    make_osx_"${OSX_VERS[0]}"_"${OSX_VERS[1]}"
-
-    # Updating permissions
-    echo "Updating permissions..."
-    chown -f $(who am i | awk '{ print $1 }') "$DEST/$DEST_NAME"
-
-    # Attach final image
-    if $ATTACH; then
-        echo "Attaching..."
-        hdiutil attach "$DEST" -autoopen -verify -quiet
-    fi
-
-    # Remove temporary files
-    trap - EXIT
-    echo "Cleaning up..."
-    remove_temp
-
-    # Done
-    echo "Done."
-    exit 0
+    TEMP=$(mktemp -d "$DEST/$DEST_NAME.XXXXXX")
 
 }
 
-osximg "$@"
+# Removes temporary files
+function remove_temp {
+
+    # Run all commands despite non-zero exit codes
+    set +e
+
+    # Detach images used for version detection and remove mount points
+    if [[ "${BASE_MOUNT_TMP:=undefinedx}" != "undefinedx" ]] && [[ "${IESD_MOUNT_TMP:=undefinedx}" != "undefinedx" ]]; then
+        hdiutil detach "$BASE_MOUNT_TMP" -force -quiet
+        hdiutil detach "$IESD_MOUNT_TMP" -force -quiet
+        sleep 2
+        rm -rf "$BASE_MOUNT_TMP" >/dev/null 2>&1
+        rm -rf "$IESD_MOUNT_TMP" >/dev/null 2>&1
+    fi
+
+    # Remove destination (if zero bytes) and lockfile
+    if [[ "${DEST:=undefinedx}" != "undefinedx" ]] && [[ "${DEST_NAME:=undefinedx}" != "undefinedx" ]]; then
+        if [[ -f "$DEST/$DEST_NAME" ]] && [[ ! -s "$DEST/$DEST_NAME" ]]; then
+            rm -f "$DEST/$DEST_NAME" >/dev/null 2>&1
+        fi
+        if [[ "$DEST_LOCKFILE" == true ]] && [[ -f "$DEST/$DEST_NAME.lock" ]]; then
+            rm -f "$DEST/$DEST_NAME.lock" >/dev/null 2>&1
+        fi
+
+    fi
+
+    # Detach images used for image creation
+    if [[ "${BASE_MOUNT:=undefinedx}" != "undefinedx" ]] && [[ "${IESD_MOUNT:=undefinedx}" != "undefinedx" ]] && [[ "${IMAGE_MOUNT:=undefinedx}" != "undefinedx" ]]; then
+        hdiutil detach "$BASE_MOUNT" -force -quiet
+        hdiutil detach "$IESD_MOUNT" -force -quiet
+        hdiutil detach "$IMAGE_MOUNT" -force -quiet
+        sleep 2
+    fi
+
+    # Remove temporary files
+    if [[ "${TEMP:=undefinedx}" != "undefinedx" ]]; then
+        if [[ -e "$TEMP" ]]; then
+            rm -rf "$TEMP" >/dev/null 2>&1
+        fi
+        if [[ -e "$TEMP" ]]; then
+            # Try again
+            sleep 8
+            rm -rf "$TEMP" >/dev/null 2>&1
+        fi
+        if [[ -e "$TEMP" ]]; then
+            # Unable to remove all temporary files
+            TEMP_ABS_PATH=$(ruby -e "puts File.expand_path(\"$TEMP\")")
+            ERROR="$SELF_NAME: some files could not be removed at path: $TEMP_ABS_PATH"
+            echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+            exit 1
+        fi
+    fi
+
+}
+
+# Cleans up on hard exit
+function yolo {
+    trap - EXIT INT TERM
+    echo "Signal caught; terminating."
+    remove_temp
+    exit 1
+}
+
+# It's a TRAP!
+function akbar_on {
+    trap yolo EXIT INT TERM
+}
+function akbar_off {
+    trap - EXIT INT TERM
+}
+
+# Mac OS X 10.7 Lion
+function make_osx_10_7 {
+
+    # Save final image
+    echo "Saving final image..."
+    hdiutil makehybrid "$IESD" -o "$IMAGE.iso" -hfs -iso -quiet
+
+    # Rename target
+    mv "$IMAGE.iso" "$DEST/$DEST_NAME"
+
+}
+
+# OS X 10.8 Mountain Lion
+function make_osx_10_8 {
+
+    # Save final image
+    echo "Saving final image..."
+    hdiutil makehybrid "$IESD" -o "$IMAGE.iso" -hfs -iso -quiet
+
+    # Rename target
+    mv "$IMAGE.iso" "$DEST/$DEST_NAME"
+
+}
+
+# OS X 10.9 Mavericks
+function make_osx_10_9 {
+
+    # Attach source
+    hdiutil attach "$IESD" -mountpoint "$IESD_MOUNT" -nobrowse -quiet
+
+    # Create temporary image
+    echo "Creating temporary image..."
+    hdiutil convert "$IESD_MOUNT/BaseSystem.dmg" -o "$IMAGE.sparsebundle" -format UDSB -quiet
+    hdiutil resize "$IMAGE.sparsebundle" -size 6g -quiet
+    hdiutil attach "$IMAGE.sparsebundle" -mountpoint "$IMAGE_MOUNT" -owners on -nobrowse -quiet
+
+    # Copy system packages
+    echo "Copying system packages..."
+    rm "$IMAGE_MOUNT/System/Installation/Packages"
+    ditto "$IESD_MOUNT/Packages" "$IMAGE_MOUNT/System/Installation/Packages"
+
+    # Eject source volumes
+    hdiutil detach "$IESD_MOUNT" -quiet
+    hdiutil detach "$IMAGE_MOUNT" -quiet
+
+    # Shrink
+    echo "Shrinking image..."
+    hdiutil resize -quiet -size min "$IMAGE.sparsebundle"
+
+    # Save final image
+    echo "Saving final image..."
+    hdiutil makehybrid "$IMAGE.sparsebundle" -o "$IMAGE.iso" -hfs -iso -quiet
+
+    # Rename target
+    mv "$IMAGE.iso" "$DEST/$DEST_NAME"
+
+}
+
+# OS X 10.10 Yosemite
+function make_osx_10_10 {
+
+    # Attach source
+    hdiutil attach "$IESD" -mountpoint "$IESD_MOUNT" -nobrowse -quiet
+
+    # Create temporary image
+    echo "Creating temporary image..."
+    hdiutil convert "$IESD_MOUNT/BaseSystem.dmg" -o "$IMAGE.sparsebundle" -format UDSB -quiet
+    hdiutil resize "$IMAGE.sparsebundle" -size 8g -quiet
+    hdiutil attach "$IMAGE.sparsebundle" -mountpoint "$IMAGE_MOUNT" -owners on -nobrowse -quiet
+
+    # Copy system packages
+    echo "Copying system packages..."
+    rm "$IMAGE_MOUNT/System/Installation/Packages"
+    ditto "$IESD_MOUNT/Packages" "$IMAGE_MOUNT/System/Installation/Packages"
+    ditto "$IESD_MOUNT/BaseSystem.chunklist" "$IMAGE_MOUNT/BaseSystem.chunklist"
+    ditto "$IESD_MOUNT/BaseSystem.dmg" "$IMAGE_MOUNT/BaseSystem.dmg"
+
+    # Eject source volumes
+    hdiutil detach "$IESD_MOUNT" -quiet
+    hdiutil detach "$IMAGE_MOUNT" -quiet
+
+    # Shrink
+    echo "Shrinking image..."
+    hdiutil resize -quiet -size min "$IMAGE.sparsebundle"
+
+    # Save final image
+    echo "Saving final image..."
+    hdiutil makehybrid "$IMAGE.sparsebundle" -o "$IMAGE.iso" -hfs -iso -quiet
+
+    # Rename target
+    mv "$IMAGE.iso" "$DEST/$DEST_NAME"
+
+}
+
+# OS X 10.11 El Capitan
+function make_osx_10_11 {
+
+    # Same as OS X 10.10 Yosemite
+    make_osx_10_10
+
+}
+
+# In case of fully operational battle station
+akbar_on
+
+# Detect and validate source version
+VERSION_PREFIX="OS X"
+VERSION_ARRAY=("" "" "" "")
+VERSION=""
+VERSION_BUNDLE_NAME=""
+VERSION_NAME=""
+VERSION_BUILD=""
+VERSION_PRETTY=""
+IESD_MOUNT_TMP=$(mktemp -d "/tmp/osximg-installesd-XXXXXX")
+BASE_MOUNT_TMP=$(mktemp -d "/tmp/osximg-basesystem-XXXXXX")
+if hdiutil attach "$IESD" -mountpoint "$IESD_MOUNT_TMP" -nobrowse -noverify -quiet; then
+    if hdiutil attach "$IESD_MOUNT_TMP/BaseSystem.dmg" -mountpoint "$BASE_MOUNT_TMP" -nobrowse -noverify -quiet; then
+        VERSION=$(/usr/libexec/PlistBuddy -c 'Print :ProductVersion' "$BASE_MOUNT_TMP"/System/Library/CoreServices/SystemVersion.plist)
+        VERSION_BUNDLE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$BASE_MOUNT_TMP"/Install*.app/Contents/Info.plist)
+        VERSION_BUILD=$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' "$BASE_MOUNT_TMP"/System/Library/CoreServices/SystemVersion.plist)
+        hdiutil detach "$BASE_MOUNT_TMP" -quiet
+    else
+        # Unable to mount base system image
+        ERROR="$SELF_NAME: unable to mount base system image"
+        echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+        exit 1
+    fi
+    hdiutil detach "$IESD_MOUNT_TMP" -quiet
+else
+    # Unable to mount source image
+    ERROR="$SELF_NAME: unable to mount source image"
+    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+    exit 1
+fi
+rm -rf "$BASE_MOUNT_TMP"
+rm -rf "$IESD_MOUNT_TMP"
+while read MAJOR MINOR PATCH BUILD; do
+    VERSION_ARRAY=("${MAJOR}" "${MINOR}" "${PATCH}" "${BUILD}")
+done <<< $(echo "${VERSION}.${VERSION_BUILD}" | awk -F "." '{ print $1 " " $2 " " $3 " " $4 }')
+if [[ "${VERSION_ARRAY[0]}" -eq "10" ]] && [[ "${VERSION_ARRAY[1]}" -gt "6" ]] && [[ "${VERSION_ARRAY[1]}" -lt "12" ]]; then
+    # Source version appears to be valid
+    VERSION_NAME="${VERSION_BUNDLE_NAME#Install*OS X }"
+    VERSION_PREFIX=$(echo "${VERSION_BUNDLE_NAME}" | sed -E -e 's/^Install ((Mac )?OS X)(.*)/\1/')
+    VERSION_PRETTY="${VERSION_PREFIX} ${VERSION} ${VERSION_NAME} (${VERSION_BUILD})"
+    echo "${VERSION_PRETTY}"
+    if [[ "$DEST" == "" ]]; then
+        akbar_off
+        exit 0
+    fi
+else
+    # Source invalid or version not supported
+    ERROR="$SELF_NAME: source invalid or version not supported: ${VERSION}"
+    echo "$ERROR" >&2 && syslog -s -l error "$ERROR"
+    exit 1
+fi
+
+# Destination
+if [[ -d "${DEST}" ]] || [[ "$((${#DEST}-1))" == "/" ]]; then
+    # User specified a directory
+    DEST_NAME="${VERSION_PRETTY}.iso"
+    DEST=${DEST%/} # Drop trailing slash
+else
+    # User specified a file
+    DEST_NAME=${DEST##*/} # Filename
+    DEST=${DEST%/*}       # Directory without trailing slash
+fi
+mkdir -p "${DEST}"
+
+# Make temporary directory
+make_temp
+
+# Temporary file paths
+IMAGE="$TEMP/osximg-temp"
+IMAGE_MOUNT="$TEMP/osximg-temp.mount"
+IESD_MOUNT="$TEMP/osximg-installesd.mount"
+BASE_MOUNT="$TEMP/osximg-basesystem.mount"
+
+# Build image
+make_osx_"${VERSION_ARRAY[0]}"_"${VERSION_ARRAY[1]}"
+
+# Updating permissions
+echo "Updating permissions..."
+chown -f $(who am i | awk '{ print $1 }') "$DEST/$DEST_NAME" >/dev/null 2>&1
+
+# Attach final image
+if $ATTACH; then
+    echo "Attaching..."
+    hdiutil attach "$DEST/$DEST_NAME" -autoopen -verify -quiet
+fi
+
+# Remove temporary files
+akbar_off
+echo "Cleaning up..."
+remove_temp
+
+# Done
+echo "Done."
+exit 0
