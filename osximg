@@ -14,7 +14,7 @@ where:
    -v  display version information
    -a  attach/mount final image when complete"
 VERSION="\
-osximg 0.9.1"
+osximg 1.0.0"
 
 # Cleans up temporary resources
 function clean_up {
