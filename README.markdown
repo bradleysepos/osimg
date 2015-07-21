@@ -25,13 +25,13 @@ This will:
 If we want, we can instead provide our own file name:
 
 ```
-$ osximg "/Applications/Install OS X Yosemite.app" "~/OS X Images/Yosemite.iso"
+$ sudo osximg "/Applications/Install OS X Yosemite.app" "~/OS X Images/Yosemite.iso"
 ```
 
 We can also tell `osximg` to use an `InstallESD.dmg` instead of an app bundle:
 
 ```
-$ osximg InstallESD.dmg .
+$ sudo osximg InstallESD.dmg .
 ```
 
 This is mostly useful if we've previously copied `Install*.app/Contents/SharedSupport/InstallESD.dmg` to another location and discarded the installer app.
