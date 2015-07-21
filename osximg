@@ -1,52 +1,5 @@
 #!/bin/bash
-# osximg - create bootable disk images from Mac OS X install files
-#
-# Version 0.9.1 (2015-07-13)
-# Consolidate Lion and Mountain Lion. Rearrange some code.
-#
-# Version 0.9.0 (2015-07-13)
-# Consolidate error handling code and improve reporting. Prefer variable
-# substitution over assignment of default values. Fix output path in certain
-# scenarios. Fix permissions on created parent directories. Many miscellaneous
-# fixes and improvements.
-#
-# Version 0.8.1 (2015-07-12)
-# Add braces to all variables.
-#
-# Version 0.8.0 (2015-07-12)
-# Detect common name and pretty format the version string. Remove wrapper
-# function and improve signal handling. Make lockfile creation/deletion more
-# robust. Fix attach. Refactor.
-#
-# Version 0.7.0 (2015-07-12)
-# Add support for El Capitan public beta. Remove -f and Apple createinstallmedia
-# method. Detect and print source version. Remove -o in favor of optional second
-# argument. Use a lockfile on destination and update permissions after creation.
-# Major refactor.
-#
-# Version 0.6.0 (2014-12-03)
-# Add support for Yosemite. Rename some variables.
-#
-# Version 0.5.0 (2014-04-30)
-# Add automatic system version detection, remove -t. Improve file handling.
-#
-# Version 0.4.2 (2014-04-30)
-# Refactor target system version argument handling. Cosmetics.
-#
-# Version 0.4.1 (2014-04-29)
-# Improve validation. Do not require super user to print help/version.
-#
-# Version 0.4.0 (2014-04-29)
-# Update API (osximg source -o path). Consolidate nearly all shared code.
-#
-# Version 0.3.0 (2014-04-29)
-# Fix Lion. Add source validation. Use more robust temporary paths. Refactor.
-#
-# Version 0.2.0 (2014-04-29)
-# Add support for Mountain Lion and Lion. Consolidate some code.
-#
-# Version 0.1.0 (2014-04-25)
-# Initial development. Mavericks supported.
+# osximg - create bootable disk images from OS X install files
 
 set -e
 set -u
