@@ -28,9 +28,9 @@ The basic syntax is:
 osximg source [destination]
 ```
 
-*When a destination is not provided*, osximg prints the source version and exits. This is an easy way to quickly inspect a source for its minor/build version.
+*When only source is provided*, osximg prints the source version and exits. This is an easy way to quickly inspect a source for its minor/build version.
 
-*When a destination is provided*, osximg prints the source version and then creates a bootable disk image from the source.
+*When both source and destination are provided*, osximg prints the source version and creates a bootable disk image from the source.
 
 Say we've downloaded the Yosemite installer from the Mac App Store, and it's in our Applications directory.
 
