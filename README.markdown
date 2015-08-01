@@ -1,45 +1,70 @@
 osximg
 ======
 
-Create bootable disk images from OS X install files.
+osximg is a Bash script that creates bootable disk images from OS X install files.
 
-Requires a recent version of OS X, `bash` (hint: `Terminal.app`), and a Mac OS X 10.7 Lion through OS X 10.11 El Capitan installer app or corresponding `InstallESD.dmg`.
+
+Requirements
+------------
+
+- OS X 10.9 Mavericks or later suggested
+- OS X installer app or `InstallESD.dmg`, Mac OS X 10.7 Lion through OS X 10.11 El Capitan
+
+
+Installation
+------------
+
+Copy `osximg` to a directory in your `PATH` and make it executable.
+
 
 Usage
 -----
 
-In order to properly apply the original installer's permissions when creating a new image, `osximg` must be run as the [root user](https://support.apple.com/en-us/HT204012). The easiest and safest way to run a single command as root is using `sudo`. Only Admin users can do this.
+osximg must be run using `sudo` to properly apply permissions to the final image.
 
-Let's assume we've downloaded the Yosemite installer from the Mac App Store, and it's in our Applications directory. We'll prefix our command with `sudo` (and enter our OS X password when prompted) in order to run `osximg` as root, followed by the paths to the OS X installer app and where we want to put our final image:
-
-```
-$ sudo osximg "/Applications/Install OS X Yosemite.app" "~/OS X Images/"
-```
-
-This will:
-
-1. Automatically detect the installer version, e.g. OS X 10.10.4 Yosemite, Build 14E46
-2. Create (if necessary) the directory `OS X Images` in our home (`~`) directory
-3. Create the final image `OS X 10.10.4 Yosemite (14E46).iso` in the `OS X Images` directory
-
-If we want, we can instead provide our own file name:
+The basic syntax is:
 
 ```
-$ sudo osximg "/Applications/Install OS X Yosemite.app" "~/OS X Images/Yosemite.iso"
+osximg source [destination]
 ```
 
-We can also tell `osximg` to use an `InstallESD.dmg` instead of an app bundle:
+*When a destination is not provided*, osximg prints the source version and exits. This is an easy way to quickly inspect a source for its minor/build version.
+
+*When a destination is provided*, osximg prints the source version and then creates a bootable disk image from the source.
+
+Say we've downloaded the Yosemite installer from the Mac App Store, and it's in our Applications directory.
 
 ```
-$ sudo osximg InstallESD.dmg .
+sudo osximg "/Applications/Install OS X Yosemite.app" "~/OS X Images/"
 ```
 
-This is mostly useful if we've previously copied `Install*.app/Contents/SharedSupport/InstallESD.dmg` to another location and discarded the installer app.
+1. Automatically detects the source version, e.g. OS X 10.10.4 Yosemite, Build 14E46
+2. If necessary, creates the directory `OS X Images` in our home (`~`) directory
+3. Creates the final image `OS X 10.10.4 Yosemite (14E46).iso` in the `~/OS X Images/` directory
 
-*It's good practice to keep a backup of the original installer app, e.g. compress/zip it and store it somewhere safe, perhaps with our newly created image alongside it.*
+If the provided destination is a directory, osximg automatically names the final image according to the source version. Providing a file name as well will override this:
+
+```
+sudo osximg "/Applications/Install OS X Yosemite.app" "~/OS X Images/Yosemite.iso"
+```
+
+osximg also accepts the `InstallESD.dmg` typically found in `Install*.app/Contents/SharedSupport/` as a source (useful when the installer app has been discarded):
+
+```
+sudo osximg InstallESD.dmg Yosemite.iso
+```
+
+*It is good practice to keep a backup of the original installer app. Compress/zip it and store it somewhere safe, perhaps alongside disk images produced by osximg.*
 
 Full usage:
 
 ```
-$ osximg -h
+osximg -h
 ```
+
+
+License
+-------
+
+Copyright 2015 Bradley Sepos  
+Released under the MIT License. See [LICENSE](LICENSE) for details.
