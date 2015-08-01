@@ -1,5 +1,8 @@
 #!/bin/bash
 # osximg - create bootable disk images from OS X install files
+#
+# Copyright 2015 Bradley Sepos
+# Released under the MIT License. See LICENSE for details.
 
 NAME="osximg"
 VERSION="1.0.0"
