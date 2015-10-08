@@ -35,13 +35,10 @@ function clean_up {
         rm -rf "${IESD_MOUNT_TMP}" >/dev/null 2>&1
     fi
 
-    # Remove destination (if zero bytes, to be safe) and lockfile
+    # Remove destination (if zero bytes, to be safe)
     if [[ "${DEST:-undefinedx}" != "undefinedx" ]] && [[ "${DEST_NAME:-undefinedx}" != "undefinedx" ]]; then
         if [[ "${DEST_FILE:-undefinedx}" == true ]] && [[ -f "${DEST}/${DEST_NAME}" ]] && [[ ! -s "${DEST}/${DEST_NAME}" ]]; then
             rm -f "${DEST}/${DEST_NAME}" >/dev/null 2>&1
-        fi
-        if [[ "${DEST_LOCKFILE:-undefinedx}" == true ]] && [[ -f "${DEST}/${DEST_NAME}.lock" ]]; then
-            rm -f "${DEST}/${DEST_NAME}.lock" >/dev/null 2>&1
         fi
     fi
 
@@ -278,7 +275,6 @@ if [[ "${DEST}" != "" ]] && [[ -e "${DEST}" ]] && [[ ! -d "${DEST}" ]]; then
 fi
 
 # Internal vars
-DEST_LOCKFILE=false
 DEST_FILE=false
 DEST_MKDIR=false
 VERSION_PREFIX=""
@@ -370,14 +366,6 @@ if [[ ! -e "${DEST}/${DEST_NAME}" ]]; then
                 fi
             fi
         done
-    fi
-
-    # Create lockfile
-    if [[ ! -e "${DEST}/${DEST_NAME}.lock" ]] && lockfile -1 -r 1 "${DEST}/${DEST_NAME}.lock" >/dev/null 2>&1; then
-        DEST_LOCKFILE=true
-    else
-        # Unable to create lockfile
-        exit_with_error 1 "${SELF_NAME}: unable to create lockfile"
     fi
 
     # Create destination file
