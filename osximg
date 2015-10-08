@@ -408,7 +408,7 @@ echo "Updating ownership..."
 chown -f $(who am i | awk '{ print $1 }') "${DEST}/${DEST_NAME}" >/dev/null 2>&1
 
 # Attach final image
-if $ATTACH; then
+if [[ "${ATTACH}" == true ]]; then
     echo "Attaching..."
     hdiutil attach "${DEST}/${DEST_NAME}" -autoopen -verify -quiet
 fi
