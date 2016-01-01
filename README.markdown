@@ -66,5 +66,5 @@ osximg -h
 License
 -------
 
-Copyright 2015 Bradley Sepos  
+Copyright 2016 Bradley Sepos  
 Released under the MIT License. See [LICENSE](LICENSE) for details.
