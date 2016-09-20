@@ -3,6 +3,7 @@
 #
 # Copyright 2016 Bradley Sepos
 # Released under the MIT License. See LICENSE for details.
+# https://github.com/bradleysepos/osimg
 
 NAME="osimg"
 VERSION="1.1.1"
