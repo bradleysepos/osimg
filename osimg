@@ -290,8 +290,8 @@ VERSION_PRETTY=""
 ackbar_on
 
 # Detect and validate source version
-IESD_MOUNT_TMP=$(mktemp -d "/tmp/osimg-installesd-XXXXXX")
-BASE_MOUNT_TMP=$(mktemp -d "/tmp/osimg-basesystem-XXXXXX")
+IESD_MOUNT_TMP=$(mktemp -d "/tmp/${NAME}-installesd-XXXXXX")
+BASE_MOUNT_TMP=$(mktemp -d "/tmp/${NAME}-basesystem-XXXXXX")
 if hdiutil attach "${IESD}" -mountpoint "${IESD_MOUNT_TMP}" -nobrowse -noverify -quiet; then
     if hdiutil attach "${IESD_MOUNT_TMP}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet; then
         VERSION=$(/usr/libexec/PlistBuddy -c 'Print :ProductVersion' "${BASE_MOUNT_TMP}"/System/Library/CoreServices/SystemVersion.plist)
@@ -384,10 +384,10 @@ fi
 
 # Create temporary resources
 TEMP=$(mktemp -d "${DEST}/${DEST_NAME}.XXXXXX")
-IMAGE="${TEMP}/osimg-temp"
-IMAGE_MOUNT="${TEMP}/osimg-temp.mount"
-IESD_MOUNT="${TEMP}/osimg-installesd.mount"
-BASE_MOUNT="${TEMP}/osimg-basesystem.mount"
+IMAGE="${TEMP}/${NAME}-temp"
+IMAGE_MOUNT="${TEMP}/${NAME}-temp.mount"
+IESD_MOUNT="${TEMP}/${NAME}-installesd.mount"
+BASE_MOUNT="${TEMP}/${NAME}-basesystem.mount"
 
 # Build image
 make_osx_"${VERSION_ARRAY[0]}"_"${VERSION_ARRAY[1]}"
