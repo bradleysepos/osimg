@@ -1,14 +1,14 @@
 osimg
 =====
 
-osimg is a Bash script that creates bootable disk images from OS X install files.
+osimg is a Bash script that creates bootable disk images from macOS install files.
 
 
 Requirements
 ------------
 
-- OS X 10.9 Mavericks or later suggested
-- OS X installer app or `InstallESD.dmg`, Mac OS X 10.7 Lion through OS X 10.11 El Capitan
+- Mac OS X 10.7 Lion through macOS 10.12 Sierra installer app or `InstallESD.dmg`
+- OS X 10.9 Mavericks or later host system
 
 
 Installation
@@ -32,26 +32,26 @@ osimg source [destination]
 
 *When both source and destination are provided*, osimg prints the source version and creates a bootable disk image from the source.
 
-Say we've downloaded the Yosemite installer from the Mac App Store, and it's in our Applications directory.
+Say we've downloaded the Sierra installer from the Mac App Store, and it's in our Applications directory.
 
 ```
-sudo osimg "/Applications/Install OS X Yosemite.app" "~/OS X Images/"
+sudo osimg "/Applications/Install macOS Sierra.app" "~/OS Images/"
 ```
 
-1. Automatically detects the source version, e.g. OS X 10.10.4 Yosemite, Build 14E46
-2. If necessary, creates the directory `OS X Images` in our home (`~`) directory
-3. Creates the final image `OS X 10.10.4 Yosemite (14E46).iso` in the `~/OS X Images/` directory
+1. Automatically detects the source version, e.g. macOS 10.12 Sierra, Build 16A323
+2. If necessary, creates the directory `OS Images` in our home (`~`) directory
+3. Creates the final image `macOS 10.12 Sierra (16A323).iso` in the `~/OS Images/` directory
 
-If the provided destination is a directory, osimg automatically names the final image according to the source version. Providing a file name as well will override this:
+If the provided destination is a directory, osimg automatically names the final image according to the source version. Providing a file name will override this behavior:
 
 ```
-sudo osimg "/Applications/Install OS X Yosemite.app" "~/OS X Images/Yosemite.iso"
+sudo osimg "/Applications/Install macOS Sierra.app" "~/OS Images/Sierra.iso"
 ```
 
 osimg also accepts the `InstallESD.dmg` typically found in `Install*.app/Contents/SharedSupport/` as a source (useful when the installer app has been discarded):
 
 ```
-sudo osimg InstallESD.dmg Yosemite.iso
+sudo osimg InstallESD.dmg Sierra.iso
 ```
 
 *It is good practice to keep a backup of the original installer app. Compress/zip it and store it somewhere safe, perhaps alongside disk images produced by osimg.*
