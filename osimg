@@ -195,6 +195,14 @@ function make_osx_10_11 {
 
 }
 
+# macOS 10.12 Sierra
+function make_osx_10_12 {
+
+    # Same as OS X 10.11 El Capitan
+    make_osx_10_11
+
+}
+
 # Super user only, except when printing help or version information
 SUID=$(id -u root)
 if [[ "${UID}" != "${SUID}" ]] && ( [[ "$#" -eq 0 ]] || grep -qv '^-\(h\|v\)' <<< "${1}" ); then
@@ -312,10 +320,16 @@ rm -rf "${IESD_MOUNT_TMP}"
 while read MAJOR MINOR PATCH BUILD; do
     VERSION_ARRAY=("${MAJOR}" "${MINOR}" "${PATCH}" "${BUILD}")
 done <<< $(echo "${VERSION}.${VERSION_BUILD}" | awk -F '.' '{ print $1 " " $2 " " $3 " " $4 }')
-if [[ "${VERSION_ARRAY[0]}" -eq "10" ]] && [[ "${VERSION_ARRAY[1]}" -gt "6" ]] && [[ "${VERSION_ARRAY[1]}" -lt "12" ]]; then
-    # Source version appears to be valid
-    VERSION_NAME="${VERSION_BUNDLE_NAME#Install*OS X }"
-    VERSION_PREFIX=$(echo "${VERSION_BUNDLE_NAME}" | sed -E -e 's/^Install ((Mac )?OS X)(.*)/\1/')
+if [[ "${VERSION_ARRAY[0]}" -eq "10" ]]; then
+    if [[ "${VERSION_ARRAY[1]}" -gt "6" ]] && [[ "${VERSION_ARRAY[1]}" -lt "12" ]]; then
+        # 10.7-10.11
+        VERSION_NAME="${VERSION_BUNDLE_NAME#Install*OS X }"
+        VERSION_PREFIX=$(echo "${VERSION_BUNDLE_NAME}" | sed -E -e 's/^Install ((Mac )?OS X)(.*)/\1/')
+    elif [[ "${VERSION_ARRAY[1]}" -eq "12" ]]; then
+        # 10.12
+        VERSION_NAME="${VERSION_BUNDLE_NAME#Install macOS }"
+        VERSION_PREFIX="macOS"
+    fi
     VERSION_PRETTY="${VERSION_PREFIX} ${VERSION} ${VERSION_NAME} (${VERSION_BUILD})"
     echo "${VERSION_PRETTY}"
     if [[ "${DEST}" == "" ]]; then
