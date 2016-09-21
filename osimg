@@ -22,8 +22,7 @@ where:
    -a  attach/mount final image when complete"
 
 # Cleans up temporary resources
-function clean_up {
-
+function clean_up_quick {
     # Run all commands despite non-zero exit codes
     set +e
 
@@ -35,6 +34,15 @@ function clean_up {
         rm -rf "${BASE_MOUNT_TMP}" >/dev/null 2>&1
         rm -rf "${IESD_MOUNT_TMP}" >/dev/null 2>&1
     fi
+
+    set -e
+}
+function clean_up {
+    # Run quick clean
+    clean_up_quick
+
+    # Run all commands despite non-zero exit codes
+    set +e
 
     # Remove destination (if zero bytes, to be safe)
     if [[ "${DEST:-undefinedx}" != "undefinedx" ]] && [[ "${DEST_NAME:-undefinedx}" != "undefinedx" ]]; then
@@ -63,6 +71,7 @@ function clean_up {
         fi
     fi
 
+    set -e
 }
 
 # Cleans up on hard exit
@@ -315,8 +324,7 @@ else
     # Unable to mount source image
     exit_with_error 1 "${SELF_NAME}: unable to mount source image"
 fi
-rm -rf "${BASE_MOUNT_TMP}"
-rm -rf "${IESD_MOUNT_TMP}"
+clean_up_quick
 while read MAJOR MINOR PATCH BUILD; do
     VERSION_ARRAY=("${MAJOR}" "${MINOR}" "${PATCH}" "${BUILD}")
 done <<< $(echo "${VERSION}.${VERSION_BUILD}" | awk -F '.' '{ print $1 " " $2 " " $3 " " $4 }')
