@@ -178,6 +178,15 @@ function make_osx_10_10 {
     ditto "${IESD_MOUNT}/Packages" "${IMAGE_MOUNT}/System/Installation/Packages"
     ditto "${IESD_MOUNT}/BaseSystem.chunklist" "${IMAGE_MOUNT}/BaseSystem.chunklist"
     ditto "${IESD_MOUNT}/BaseSystem.dmg" "${IMAGE_MOUNT}/BaseSystem.dmg"
+    echo '<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Kernel Flags</key>
+	<string>root-dmg=file:///BaseSystem.dmg</string>
+</dict>
+</plist>
+' > "${IMAGE_MOUNT}/Library/Preferences/SystemConfiguration/com.apple.Boot.plist"
 
     # Eject source volumes
     hdiutil detach "${IESD_MOUNT}" -quiet
