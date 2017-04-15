@@ -35,7 +35,7 @@ osimg source [destination]
 Say we've downloaded the Sierra installer from the Mac App Store, and it's in our Applications directory.
 
 ```
-sudo osimg "/Applications/Install macOS Sierra.app" "~/OS Images/"
+sudo osimg "/Applications/Install macOS Sierra.app" ~/"OS Images/"
 ```
 
 1. Automatically detects the source version, e.g. macOS 10.12 Sierra, Build 16A323
@@ -45,7 +45,7 @@ sudo osimg "/Applications/Install macOS Sierra.app" "~/OS Images/"
 If the provided destination is a directory, osimg automatically names the final image according to the source version. Providing a file name will override this behavior:
 
 ```
-sudo osimg "/Applications/Install macOS Sierra.app" "~/OS Images/Sierra.iso"
+sudo osimg "/Applications/Install macOS Sierra.app" ~/"OS Images/Sierra.iso"
 ```
 
 osimg also accepts the `InstallESD.dmg` typically found in `Install*.app/Contents/SharedSupport/` as a source (useful when the installer app has been discarded):
