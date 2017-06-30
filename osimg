@@ -221,6 +221,51 @@ function make_osx_10_12 {
 
 }
 
+# macOS 10.13 High Sierra
+function make_osx_10_13 {
+
+    # Attach source
+    hdiutil attach "${IESD}" -mountpoint "${IESD_MOUNT}" -nobrowse -quiet
+
+    # Create temporary image
+    echo "Creating temporary image..."
+    hdiutil convert "${IESD%InstallESD\.dmg}/BaseSystem.dmg" -o "${IMAGE}.sparsebundle" -format UDSB -quiet
+    hdiutil resize "${IMAGE}.sparsebundle" -size 8g -quiet
+    hdiutil attach "${IMAGE}.sparsebundle" -mountpoint "${IMAGE_MOUNT}" -owners on -nobrowse -quiet
+
+    # Copy system packages
+    echo "Copying system packages..."
+    rm -rf "${IMAGE_MOUNT}/System/Installation/Packages"
+    ditto "${IESD_MOUNT}/Packages" "${IMAGE_MOUNT}/System/Installation/Packages"
+    ditto "${IESD%InstallESD\.dmg}/BaseSystem.chunklist" "${IMAGE_MOUNT}/BaseSystem.chunklist"
+    ditto "${IESD%InstallESD\.dmg}/BaseSystem.dmg" "${IMAGE_MOUNT}/BaseSystem.dmg"
+    echo '<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Kernel Flags</key>
+	<string>root-dmg=file:///BaseSystem.dmg</string>
+</dict>
+</plist>
+' > "${IMAGE_MOUNT}/Library/Preferences/SystemConfiguration/com.apple.Boot.plist"
+
+    # Eject source volumes
+    hdiutil detach "${IESD_MOUNT}" -quiet
+    hdiutil detach "${IMAGE_MOUNT}" -quiet
+
+    # Shrink
+    echo "Shrinking image..."
+    hdiutil resize -quiet -size min "${IMAGE}.sparsebundle"
+
+    # Save final image
+    echo "Saving final image..."
+    hdiutil makehybrid "${IMAGE}.sparsebundle" -o "${IMAGE}.iso" -hfs -iso -quiet
+
+    # Rename target
+    mv "${IMAGE}.iso" "${DEST}/${DEST_NAME}"
+
+}
+
 # Super user only, except when printing help or version information
 SUID=$(id -u root)
 if [[ "${UID}" != "${SUID}" ]] && ( [[ "$#" -eq 0 ]] || grep -qv '^-\(h\|v\)' <<< "${1}" ); then
@@ -319,7 +364,8 @@ ackbar_on
 IESD_MOUNT_TMP=$(mktemp -d "/tmp/${NAME}-installesd-XXXXXX")
 BASE_MOUNT_TMP=$(mktemp -d "/tmp/${NAME}-basesystem-XXXXXX")
 if hdiutil attach "${IESD}" -mountpoint "${IESD_MOUNT_TMP}" -nobrowse -noverify -quiet; then
-    if hdiutil attach "${IESD_MOUNT_TMP}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet; then
+    if hdiutil attach "${IESD_MOUNT_TMP}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet || \
+       hdiutil attach "${IESD%InstallESD\.dmg}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet; then
         VERSION=$(/usr/libexec/PlistBuddy -c 'Print :ProductVersion' "${BASE_MOUNT_TMP}"/System/Library/CoreServices/SystemVersion.plist)
         VERSION_BUNDLE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "${BASE_MOUNT_TMP}"/Install*.app/Contents/Info.plist)
         VERSION_BUILD=$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' "${BASE_MOUNT_TMP}"/System/Library/CoreServices/SystemVersion.plist)
@@ -344,8 +390,8 @@ if [[ "${VERSION_ARRAY[0]}" -eq "10" ]]; then
         # 10.7-10.11
         VERSION_NAME="${VERSION_BUNDLE_NAME#Install*OS X }"
         VERSION_PREFIX=$(echo "${VERSION_BUNDLE_NAME}" | sed -E -e 's/^Install ((Mac )?OS X)(.*)/\1/')
-    elif [[ "${VERSION_ARRAY[1]}" -eq "12" ]]; then
-        # 10.12
+    elif [[ "${VERSION_ARRAY[1]}" -gt "11" ]]; then
+        # 10.12+
         VERSION_NAME="${VERSION_BUNDLE_NAME#Install macOS }"
         VERSION_PREFIX="macOS"
     fi
