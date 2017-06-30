@@ -140,7 +140,7 @@ function make_osx_10_9 {
 
     # Copy system packages
     echo "Copying system packages..."
-    rm "${IMAGE_MOUNT}/System/Installation/Packages"
+    rm -rf "${IMAGE_MOUNT}/System/Installation/Packages"
     ditto "${IESD_MOUNT}/Packages" "${IMAGE_MOUNT}/System/Installation/Packages"
 
     # Eject source volumes
@@ -174,7 +174,7 @@ function make_osx_10_10 {
 
     # Copy system packages
     echo "Copying system packages..."
-    rm "${IMAGE_MOUNT}/System/Installation/Packages"
+    rm -rf "${IMAGE_MOUNT}/System/Installation/Packages"
     ditto "${IESD_MOUNT}/Packages" "${IMAGE_MOUNT}/System/Installation/Packages"
     ditto "${IESD_MOUNT}/BaseSystem.chunklist" "${IMAGE_MOUNT}/BaseSystem.chunklist"
     ditto "${IESD_MOUNT}/BaseSystem.dmg" "${IMAGE_MOUNT}/BaseSystem.dmg"
