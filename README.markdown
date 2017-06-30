@@ -7,7 +7,7 @@ osimg is a Bash script that creates bootable disk images from macOS install file
 Requirements
 ------------
 
-- Mac OS X 10.7 Lion through macOS 10.12 Sierra installer app or `InstallESD.dmg`
+- Mac OS X 10.7 Lion through macOS 10.13 High Sierra installer app or `InstallESD.dmg`†
 - OS X 10.9 Mavericks or later host system
 
 
@@ -48,7 +48,7 @@ If the provided destination is a directory, osimg automatically names the final 
 sudo osimg "/Applications/Install macOS Sierra.app" ~/"OS Images/Sierra.iso"
 ```
 
-osimg also accepts the `InstallESD.dmg` typically found in `Install*.app/Contents/SharedSupport/` as a source (useful when the installer app has been discarded):
+osimg also accepts the `InstallESD.dmg` typically found in `Install*.app/Contents/SharedSupport/` as a source (useful when the installer app has been discarded)†:
 
 ```
 sudo osimg InstallESD.dmg Sierra.iso
@@ -61,6 +61,8 @@ Full usage:
 ```
 osimg -h
 ```
+
+† *As of macOS 10.13 High Sierra, `BaseSystem.dmg` is located alongside, rather than within, `InstallESD.dmg`. For this reason, it is recommended to use osimg with the main installer app.*
 
 
 License
