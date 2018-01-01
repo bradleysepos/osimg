@@ -1,7 +1,7 @@
 #!/bin/bash
 # osimg - create bootable disk images from macOS install files
 #
-# Copyright 2017 Bradley Sepos
+# Copyright 2018 Bradley Sepos
 # Released under the MIT License. See LICENSE for details.
 # https://github.com/bradleysepos/osimg
 
