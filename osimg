@@ -266,6 +266,14 @@ function make_osx_10_13 {
 
 }
 
+# macOS 10.14 Mojave
+function make_osx_10_14 {
+
+    # Same as macOS 10.13 High Sierra
+    make_osx_10_13
+
+}
+
 # Super user only, except when printing help or version information
 SUID=$(id -u root)
 if [[ "${UID}" != "${SUID}" ]] && ( [[ "$#" -eq 0 ]] || grep -qv '^-\(h\|v\)' <<< "${1}" ); then
