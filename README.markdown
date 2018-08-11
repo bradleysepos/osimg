@@ -7,7 +7,7 @@ osimg is a Bash script that creates bootable disk images from macOS install file
 Requirements
 ------------
 
-- Mac OS X 10.7 Lion through macOS 10.13 High Sierra installer app or `InstallESD.dmg`†
+- Mac OS X 10.7 Lion through macOS 10.14 Mojave installer app or `InstallESD.dmg`†
 - OS X 10.9 Mavericks or later host system
 
 
