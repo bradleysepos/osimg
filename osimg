@@ -6,7 +6,7 @@
 # https://github.com/bradleysepos/osimg
 
 NAME="osimg"
-VERSION="1.6.0"
+VERSION="1.6.1"
 
 set -e
 set -u
