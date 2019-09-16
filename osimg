@@ -230,7 +230,7 @@ function make_osx_10_13 {
     # Create temporary image
     echo "Creating temporary image..."
     hdiutil convert "${IESD%InstallESD\.dmg}/BaseSystem.dmg" -o "${IMAGE}.sparsebundle" -format UDSB -quiet
-    hdiutil resize "${IMAGE}.sparsebundle" -size 8g -quiet
+    hdiutil resize "${IMAGE}.sparsebundle" -size 10g -quiet
     hdiutil attach "${IMAGE}.sparsebundle" -mountpoint "${IMAGE_MOUNT}" -owners on -nobrowse -quiet
 
     # Copy system packages
