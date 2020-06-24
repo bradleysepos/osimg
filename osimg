@@ -282,6 +282,13 @@ function make_osx_10_15 {
 
 }
 
+# macOS 11.0 Big Sur
+function make_osx_11_0 {
+
+    exit_with_error 1 "${SELF_NAME}: support for macOS 11.0 not yet implemented"
+
+}
+
 # Super user only, except when printing help or version information
 SUID=$(id -u root)
 if [[ "${UID}" != "${SUID}" ]] && ( [[ "$#" -eq 0 ]] || grep -qv '^-\(h\|v\)' <<< "${1}" ); then
@@ -345,12 +352,15 @@ elif [[ ! -e "${SOURCE}" ]]; then
 fi
 
 # Validate source is or contains a disk image
-if hdiutil imageinfo -format "${SOURCE}" >/dev/null 2>&1; then
-    # Source is a disk image
-    IESD="${SOURCE}"
+if hdiutil imageinfo -format "${SOURCE}/Contents/SharedSupport/SharedSupport.dmg" >/dev/null 2>&1; then
+    # Source is an app bundle, disk image found inside (11.x)
+    IESD="${SOURCE}/Contents/SharedSupport/SharedSupport.dmg"
 elif hdiutil imageinfo -format "${SOURCE}/Contents/SharedSupport/InstallESD.dmg" >/dev/null 2>&1; then
-    # Source is an app bundle, disk image found inside
+    # Source is an app bundle, disk image found inside (10.x)
     IESD="${SOURCE}/Contents/SharedSupport/InstallESD.dmg"
+elif hdiutil imageinfo -format "${SOURCE}" >/dev/null 2>&1; then
+    # Source is a disk image (10.x InstallESD.dmg)
+    IESD="${SOURCE}"
 else
     # Unable to locate an installer image
     exit_with_error 1 "${SELF_NAME}: unable to locate an installer image"
@@ -380,8 +390,16 @@ ackbar_on
 IESD_MOUNT_TMP=$(mktemp -d "${TMPDIR:-/tmp/}${NAME}-installesd-XXXXXX")
 BASE_MOUNT_TMP=$(mktemp -d "${TMPDIR:-/tmp/}${NAME}-basesystem-XXXXXX")
 if hdiutil attach "${IESD}" -mountpoint "${IESD_MOUNT_TMP}" -nobrowse -noverify -quiet; then
-    if hdiutil attach "${IESD_MOUNT_TMP}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet || \
-       hdiutil attach "${IESD%InstallESD\.dmg}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet; then
+    if [[ -r "${IESD_MOUNT_TMP}/com_apple_MobileAsset_MacSoftwareUpdate/com_apple_MobileAsset_MacSoftwareUpdate.xml" ]]; then
+        INFO_FILE="${IESD_MOUNT_TMP}/com_apple_MobileAsset_MacSoftwareUpdate/com_apple_MobileAsset_MacSoftwareUpdate.xml"
+        VERSION=$(/usr/libexec/PlistBuddy -c 'Print :Assets:0:OSVersion' "${INFO_FILE}")
+        VERSION=$(echo "${VERSION}" | sed 's/^10\.16/11.0/')
+        VERSION_PREFIX=$(/usr/libexec/PlistBuddy -c 'Print :Assets:0:SUProductSystemName' "${INFO_FILE}")
+        VERSION_BUILD=$(/usr/libexec/PlistBuddy -c 'Print :Assets:0:Build' "${INFO_FILE}")
+        #echo "${VERSION}"
+        #exit_with_error 1 "worked!"
+    elif hdiutil attach "${IESD_MOUNT_TMP}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet || \
+         hdiutil attach "${IESD%InstallESD\.dmg}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet; then
         VERSION=$(/usr/libexec/PlistBuddy -c 'Print :ProductVersion' "${BASE_MOUNT_TMP}"/System/Library/CoreServices/SystemVersion.plist)
         VERSION_BUNDLE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "${BASE_MOUNT_TMP}"/Install*.app/Contents/Info.plist)
         VERSION_BUILD=$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' "${BASE_MOUNT_TMP}"/System/Library/CoreServices/SystemVersion.plist)
@@ -395,22 +413,29 @@ else
     # Unable to mount source image
     exit_with_error 1 "${SELF_NAME}: unable to mount source image
 eject the following volumes and quit Disk Utility before running ${NAME}
-$(hdiutil info | grep '/dev/disk' | grep -E 'Install ?ESD' | awk -F'\t' '{ print $1 FS $3 }' | sed 's/ /\\ /g')"
+$(hdiutil info | grep '/dev/disk' | grep -E -e 'Install ?ESD' -e 'Shared Support' | awk -F'\t' '{ print $1 FS $3 }' | sed 's/ /\\ /g')"
 fi
 clean_up_quick
 while read MAJOR MINOR PATCH BUILD; do
     VERSION_ARRAY=("${MAJOR}" "${MINOR}" "${PATCH}" "${BUILD}")
 done <<< $(echo "${VERSION}.${VERSION_BUILD}" | awk -F '.' '{ print $1 " " $2 " " $3 " " $4 }')
-if [[ "${VERSION_ARRAY[0]}" -eq "10" ]]; then
+if [[ "${VERSION_ARRAY[0]}" -eq "11" ]]; then
+    if [[ "${VERSION_ARRAY[1]}" -eq "0" ]]; then
+        # 11.0
+        VERSION_NAME="Big Sur"
+    fi
+elif [[ "${VERSION_ARRAY[0]}" -eq "10" ]]; then
     if [[ "${VERSION_ARRAY[1]}" -gt "6" ]] && [[ "${VERSION_ARRAY[1]}" -lt "12" ]]; then
         # 10.7-10.11
         VERSION_NAME="${VERSION_BUNDLE_NAME#Install*OS X }"
         VERSION_PREFIX=$(echo "${VERSION_BUNDLE_NAME}" | sed -E -e 's/^Install ((Mac )?OS X)(.*)/\1/')
     elif [[ "${VERSION_ARRAY[1]}" -gt "11" ]]; then
-        # 10.12+
+        # 10.12-10.15
         VERSION_NAME="${VERSION_BUNDLE_NAME#Install macOS }"
         VERSION_PREFIX="macOS"
     fi
+fi
+if [[ "${VERSION_NAME:-}" != "" ]]; then
     VERSION_PRETTY="${VERSION_PREFIX} ${VERSION} ${VERSION_NAME} (${VERSION_BUILD})"
     echo "${VERSION_PRETTY}"
     if [[ "${DEST}" == "" ]]; then
