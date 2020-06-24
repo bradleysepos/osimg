@@ -377,8 +377,8 @@ VERSION_PRETTY=""
 ackbar_on
 
 # Detect and validate source version
-IESD_MOUNT_TMP=$(mktemp -d "/tmp/${NAME}-installesd-XXXXXX")
-BASE_MOUNT_TMP=$(mktemp -d "/tmp/${NAME}-basesystem-XXXXXX")
+IESD_MOUNT_TMP=$(mktemp -d "${TMPDIR:-/tmp/}${NAME}-installesd-XXXXXX")
+BASE_MOUNT_TMP=$(mktemp -d "${TMPDIR:-/tmp/}${NAME}-basesystem-XXXXXX")
 if hdiutil attach "${IESD}" -mountpoint "${IESD_MOUNT_TMP}" -nobrowse -noverify -quiet; then
     if hdiutil attach "${IESD_MOUNT_TMP}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet || \
        hdiutil attach "${IESD%InstallESD\.dmg}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet; then
