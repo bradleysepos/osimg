@@ -70,8 +70,7 @@ function clean_up {
     fi
 
     # Detach images used for image creation
-    if [[ "${BASE_MOUNT:-undefinedx}" != "undefinedx" ]] && [[ "${IESD_MOUNT:-undefinedx}" != "undefinedx" ]] && [[ "${IMAGE_MOUNT:-undefinedx}" != "undefinedx" ]]; then
-        hdiutil detach "${BASE_MOUNT}" -force -quiet
+    if [[ "${IESD_MOUNT:-undefinedx}" != "undefinedx" ]] && [[ "${IMAGE_MOUNT:-undefinedx}" != "undefinedx" ]]; then
         hdiutil detach "${IESD_MOUNT}" -force -quiet
         hdiutil detach "${IMAGE_MOUNT}" -force -quiet
         sleep 2
@@ -520,7 +519,6 @@ TEMP=$(mktemp -d "${DEST}/${DEST_NAME}.XXXXXX")
 IMAGE="${TEMP}/${NAME}-temp"
 IMAGE_MOUNT="${TEMP}/${NAME}-temp.mount"
 IESD_MOUNT="${TEMP}/${NAME}-installesd.mount"
-BASE_MOUNT="${TEMP}/${NAME}-basesystem.mount"
 
 # Build image
 make_osx_"${VERSION_ARRAY[0]}"_"${VERSION_ARRAY[1]}"
