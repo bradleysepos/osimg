@@ -410,7 +410,10 @@ BASE_MOUNT_TMP="${SOURCE_TMP}/basesystem.mount"
 mkdir "${IESD_MOUNT_TMP}" 2>/dev/null
 mkdir "${BASE_MOUNT_TMP}" 2>/dev/null
 if hdiutil attach "${IESD}" -mountpoint "${IESD_MOUNT_TMP}" -nobrowse -noverify -quiet; then
-    unzip -jqq "${IESD_MOUNT_TMP}"/$(/usr/libexec/PlistBuddy -c 'Print :Assets:0:__RelativePath' "${IESD_MOUNT_TMP}/com_apple_MobileAsset_MacSoftwareUpdate/com_apple_MobileAsset_MacSoftwareUpdate.xml" 2>/dev/null) AssetData/Restore/BaseSystem.chunklist AssetData/Restore/BaseSystem.dmg -d "${SOURCE_TMP}" 2>/dev/null || :
+    ARCHIVE_PATH=$(/usr/libexec/PlistBuddy -c 'Print :Assets:0:__RelativePath' "${IESD_MOUNT_TMP}/com_apple_MobileAsset_MacSoftwareUpdate/com_apple_MobileAsset_MacSoftwareUpdate.xml" 2>/dev/null)
+    if [[ "${ARCHIVE_PATH:-}" != "" ]] && [[ -r "${IESD_MOUNT_TMP}/${ARCHIVE_PATH}" ]]; then
+        unzip -jqq "${IESD_MOUNT_TMP}/${ARCHIVE_PATH}" AssetData/Restore/BaseSystem.chunklist AssetData/Restore/BaseSystem.dmg -d "${SOURCE_TMP}" 2>/dev/null
+    fi
     if hdiutil attach "${SOURCE_TMP}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet || \
        hdiutil attach "${IESD_MOUNT_TMP}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet || \
        hdiutil attach "${IESD%InstallESD\.dmg}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet; then
