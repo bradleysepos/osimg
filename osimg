@@ -27,12 +27,11 @@ function clean_up_quick {
     set +e
 
     # Detach images used for version detection and remove mount points
-    if [[ "${BASE_MOUNT_TMP:-undefinedx}" != "undefinedx" ]] && [[ "${IESD_MOUNT_TMP:-undefinedx}" != "undefinedx" ]]; then
+    if [[ "${SOURCE_TMP:-undefinedx}" != "undefinedx" ]]; then
         hdiutil detach "${BASE_MOUNT_TMP}" -force -quiet
         hdiutil detach "${IESD_MOUNT_TMP}" -force -quiet
         sleep 2
-        rm -rf "${BASE_MOUNT_TMP}" >/dev/null 2>&1
-        rm -rf "${IESD_MOUNT_TMP}" >/dev/null 2>&1
+        rm -rf "${SOURCE_TMP}" >/dev/null 2>&1
     fi
 
     set -e
@@ -387,8 +386,11 @@ VERSION_PRETTY=""
 ackbar_on
 
 # Detect and validate source version
-IESD_MOUNT_TMP=$(mktemp -d "${TMPDIR:-/tmp/}${NAME}-installesd-XXXXXX")
-BASE_MOUNT_TMP=$(mktemp -d "${TMPDIR:-/tmp/}${NAME}-basesystem-XXXXXX")
+SOURCE_TMP=$(mktemp -d "${TMPDIR:-/tmp/}${NAME}-XXXXXX")
+IESD_MOUNT_TMP="${SOURCE_TMP}/installesd.mount"
+BASE_MOUNT_TMP="${SOURCE_TMP}/basesystem.mount"
+mkdir "${IESD_MOUNT_TMP}" 2>/dev/null
+mkdir "${BASE_MOUNT_TMP}" 2>/dev/null
 if hdiutil attach "${IESD}" -mountpoint "${IESD_MOUNT_TMP}" -nobrowse -noverify -quiet; then
     if [[ -r "${IESD_MOUNT_TMP}/com_apple_MobileAsset_MacSoftwareUpdate/com_apple_MobileAsset_MacSoftwareUpdate.xml" ]]; then
         INFO_FILE="${IESD_MOUNT_TMP}/com_apple_MobileAsset_MacSoftwareUpdate/com_apple_MobileAsset_MacSoftwareUpdate.xml"
