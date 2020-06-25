@@ -21,6 +21,22 @@ where:
    -v  display version information
    -a  attach/mount final image when complete"
 
+# Ejects the container device associated with a disk image
+function eject_container {  # eject_container $IMAGEFILE
+    IMAGEFILE="${1:-}"
+    [[ "${IMAGEFILE}" == "" ]] && return 1
+    OIFS="${IFS}"
+    IFS=$'\n'
+    DEVICES=($(hdiutil info | awk -F'\n' 'BEGIN { RS="================================================"; img="'"${IMAGEFILE}"'" } { found=0; for (i=1; i<=NF; i++) { if ($i ~ ("image-(path|alias) *: " img "$")) { found=1 } if ((found==1) && ($i ~ ("^/dev/disk[0-9]+\t"))) { split($i,out,"\t"); print out[1] }}}' | sort -u))
+    IFS="${OIFS}"
+    if [[ "${#DEVICES[@]}" -gt 0 ]]; then
+        for DEVICE in "${DEVICES[@]}"; do
+            diskutil eject "${DEVICE}" force >/dev/null 2>&1
+            sleep 2
+        done
+    fi
+}
+
 # Cleans up temporary resources
 function clean_up_quick {
     # Run all commands despite non-zero exit codes
@@ -29,6 +45,9 @@ function clean_up_quick {
     # Detach images used for version detection and remove mount points
     if [[ "${SOURCE_TMP:-undefinedx}" != "undefinedx" ]]; then
         hdiutil detach "${BASE_MOUNT_TMP}" -force -quiet
+        sleep 2
+        eject_container "${SOURCE_TMP}/BaseSystem.dmg"
+        sleep 2
         hdiutil detach "${IESD_MOUNT_TMP}" -force -quiet
         sleep 2
         rm -rf "${SOURCE_TMP}" >/dev/null 2>&1
@@ -392,17 +411,12 @@ BASE_MOUNT_TMP="${SOURCE_TMP}/basesystem.mount"
 mkdir "${IESD_MOUNT_TMP}" 2>/dev/null
 mkdir "${BASE_MOUNT_TMP}" 2>/dev/null
 if hdiutil attach "${IESD}" -mountpoint "${IESD_MOUNT_TMP}" -nobrowse -noverify -quiet; then
-    if [[ -r "${IESD_MOUNT_TMP}/com_apple_MobileAsset_MacSoftwareUpdate/com_apple_MobileAsset_MacSoftwareUpdate.xml" ]]; then
-        INFO_FILE="${IESD_MOUNT_TMP}/com_apple_MobileAsset_MacSoftwareUpdate/com_apple_MobileAsset_MacSoftwareUpdate.xml"
-        VERSION=$(/usr/libexec/PlistBuddy -c 'Print :Assets:0:OSVersion' "${INFO_FILE}")
+    unzip -jqq "${IESD_MOUNT_TMP}"/$(/usr/libexec/PlistBuddy -c 'Print :Assets:0:__RelativePath' "${IESD_MOUNT_TMP}/com_apple_MobileAsset_MacSoftwareUpdate/com_apple_MobileAsset_MacSoftwareUpdate.xml" 2>/dev/null) AssetData/Restore/BaseSystem.chunklist AssetData/Restore/BaseSystem.dmg -d "${SOURCE_TMP}" 2>/dev/null || :
+    if hdiutil attach "${SOURCE_TMP}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet || \
+       hdiutil attach "${IESD_MOUNT_TMP}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet || \
+       hdiutil attach "${IESD%InstallESD\.dmg}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet; then
+        VERSION=$(/usr/libexec/PlistBuddy -c 'Print :ProductVersion' "${BASE_MOUNT_TMP}"/System/Library/CoreServices/SystemVersion.plist 2>/dev/null)
         VERSION=$(echo "${VERSION}" | sed 's/^10\.16/11.0/')
-        VERSION_PREFIX=$(/usr/libexec/PlistBuddy -c 'Print :Assets:0:SUProductSystemName' "${INFO_FILE}")
-        VERSION_BUILD=$(/usr/libexec/PlistBuddy -c 'Print :Assets:0:Build' "${INFO_FILE}")
-        #echo "${VERSION}"
-        #exit_with_error 1 "worked!"
-    elif hdiutil attach "${IESD_MOUNT_TMP}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet || \
-         hdiutil attach "${IESD%InstallESD\.dmg}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet; then
-        VERSION=$(/usr/libexec/PlistBuddy -c 'Print :ProductVersion' "${BASE_MOUNT_TMP}"/System/Library/CoreServices/SystemVersion.plist)
         VERSION_BUNDLE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "${BASE_MOUNT_TMP}"/Install*.app/Contents/Info.plist)
         VERSION_BUILD=$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' "${BASE_MOUNT_TMP}"/System/Library/CoreServices/SystemVersion.plist)
         hdiutil detach "${BASE_MOUNT_TMP}" -quiet
@@ -421,20 +435,15 @@ clean_up_quick
 while read MAJOR MINOR PATCH BUILD; do
     VERSION_ARRAY=("${MAJOR}" "${MINOR}" "${PATCH}" "${BUILD}")
 done <<< $(echo "${VERSION}.${VERSION_BUILD}" | awk -F '.' '{ print $1 " " $2 " " $3 " " $4 }')
-if [[ "${VERSION_ARRAY[0]}" -eq "11" ]]; then
-    if [[ "${VERSION_ARRAY[1]}" -eq "0" ]]; then
-        # 11.0
-        VERSION_NAME="Big Sur"
-    fi
-elif [[ "${VERSION_ARRAY[0]}" -eq "10" ]]; then
-    if [[ "${VERSION_ARRAY[1]}" -gt "6" ]] && [[ "${VERSION_ARRAY[1]}" -lt "12" ]]; then
-        # 10.7-10.11
-        VERSION_NAME="${VERSION_BUNDLE_NAME#Install*OS X }"
-        VERSION_PREFIX=$(echo "${VERSION_BUNDLE_NAME}" | sed -E -e 's/^Install ((Mac )?OS X)(.*)/\1/')
-    elif [[ "${VERSION_ARRAY[1]}" -gt "11" ]]; then
+if [[ "${VERSION_ARRAY[0]}" -eq "11" ]] || [[ "${VERSION_ARRAY[0]}" -eq "10" ]]; then
+    if [[ "${VERSION_ARRAY[0]}" -eq "11" ]] || [[ "${VERSION_ARRAY[1]}" -gt "11" ]]; then
         # 10.12-10.15
         VERSION_NAME="${VERSION_BUNDLE_NAME#Install macOS }"
         VERSION_PREFIX="macOS"
+    elif [[ "${VERSION_ARRAY[1]}" -gt "6" ]] && [[ "${VERSION_ARRAY[1]}" -lt "12" ]]; then
+        # 10.7-10.11
+        VERSION_NAME="${VERSION_BUNDLE_NAME#Install*OS X }"
+        VERSION_PREFIX=$(echo "${VERSION_BUNDLE_NAME}" | sed -E -e 's/^Install ((Mac )?OS X)(.*)/\1/')
     fi
 fi
 if [[ "${VERSION_NAME:-}" != "" ]]; then
