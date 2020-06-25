@@ -422,7 +422,9 @@ if hdiutil attach "${IESD}" -mountpoint "${IESD_MOUNT_TMP}" -nobrowse -noverify 
         hdiutil detach "${BASE_MOUNT_TMP}" -quiet
     else
         # Unable to mount base system image
-        exit_with_error 1 "${SELF_NAME}: unable to mount base system image"
+        exit_with_error 1 "${SELF_NAME}: unable to mount base system image
+eject the following volumes and quit Disk Utility before running ${NAME}
+$(hdiutil info | grep '/dev/disk' | grep -E -e 'Base System' | awk -F'\t' '{ print $1 FS $3 }' | sed 's/ /\\ /g')"
     fi
     hdiutil detach "${IESD_MOUNT_TMP}" -quiet
 else
