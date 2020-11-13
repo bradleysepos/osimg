@@ -417,13 +417,18 @@ if hdiutil attach "${IESD}" -mountpoint "${IESD_MOUNT_TMP}" -nobrowse -noverify 
     if [[ "${ARCHIVE_PATH}" != "" ]] && [[ -r "${IESD_MOUNT_TMP}/${ARCHIVE_PATH}" ]]; then
         unzip -jqq "${IESD_MOUNT_TMP}/${ARCHIVE_PATH}" AssetData/Restore/BaseSystem.chunklist AssetData/Restore/BaseSystem.dmg -d "${SOURCE_TMP}" 2>/dev/null
     fi
-    if hdiutil attach "${SOURCE_TMP}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet || \
-       hdiutil attach "${IESD_MOUNT_TMP}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet || \
-       hdiutil attach "${IESD%InstallESD\.dmg}/BaseSystem.dmg" -mountpoint "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet; then
+    if hdiutil attach "${SOURCE_TMP}/BaseSystem.dmg" -mountroot "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet || \
+       hdiutil attach "${IESD_MOUNT_TMP}/BaseSystem.dmg" -mountroot "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet || \
+       hdiutil attach "${IESD%InstallESD\.dmg}/BaseSystem.dmg" -mountroot "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet; then
+        BASE_MOUNT_TMP=$(cd "${BASE_MOUNT_TMP}/"*" Base System" && pwd -P)
         VERSION=$(/usr/libexec/PlistBuddy -c 'Print :ProductVersion' "${BASE_MOUNT_TMP}"/System/Library/CoreServices/SystemVersion.plist 2>/dev/null)
-        VERSION=$(echo "${VERSION}" | sed 's/^10\.16/11.0/')
+        VERSION=$(echo "${VERSION}" | sed 's/^10\.16/11/')
+        VERSION="${VERSION:-0}"
+        [[ ! "${VERSION}" == *"."* ]] && VERSION="${VERSION}.0"
+        [[ ! "${VERSION}" == *"."*"."* ]] && VERSION="${VERSION}.0"
         VERSION_BUNDLE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "${BASE_MOUNT_TMP}"/Install*.app/Contents/Info.plist)
         VERSION_BUILD=$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' "${BASE_MOUNT_TMP}"/System/Library/CoreServices/SystemVersion.plist)
+        VERSION_BUILD="${VERSION_BUILD:-0}"
         hdiutil detach "${BASE_MOUNT_TMP}" -quiet
     else
         # Unable to mount base system image
@@ -444,7 +449,7 @@ while read MAJOR MINOR PATCH BUILD; do
 done <<< $(echo "${VERSION}.${VERSION_BUILD}" | awk -F '.' '{ print $1 " " $2 " " $3 " " $4 }')
 if [[ "${VERSION_ARRAY[0]}" -eq "11" ]] || [[ "${VERSION_ARRAY[0]}" -eq "10" ]]; then
     if [[ "${VERSION_ARRAY[0]}" -eq "11" ]] || [[ "${VERSION_ARRAY[1]}" -gt "11" ]]; then
-        # 10.12-10.15
+        # 10.12+
         VERSION_NAME="${VERSION_BUNDLE_NAME#Install macOS }"
         VERSION_PREFIX="macOS"
     elif [[ "${VERSION_ARRAY[1]}" -gt "6" ]] && [[ "${VERSION_ARRAY[1]}" -lt "12" ]]; then
@@ -454,7 +459,7 @@ if [[ "${VERSION_ARRAY[0]}" -eq "11" ]] || [[ "${VERSION_ARRAY[0]}" -eq "10" ]];
     fi
 fi
 if [[ "${VERSION_NAME:-}" != "" ]]; then
-    VERSION_PRETTY="${VERSION_PREFIX} ${VERSION} ${VERSION_NAME} (${VERSION_BUILD})"
+    VERSION_PRETTY="${VERSION_PREFIX} $(echo ${VERSION} | sed -E 's/(\.0)+$//') ${VERSION_NAME} (${VERSION_BUILD})"
     echo "${VERSION_PRETTY}"
     if [[ "${DEST}" == "" ]]; then
         ackbar_off # No clean up should be necessary at this point
