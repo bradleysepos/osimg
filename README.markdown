@@ -10,6 +10,7 @@ Requirements
 - Mac OS X 10.7 Lion through macOS 10.15 Catalina installer app or `InstallESD.dmg`†
 - OS X 10.9 Mavericks or later host system
 
+While the installer for macOS 11 Big Sur is properly identified, creating a bootable disk image is not yet possible using `osimg`. In the meantime, you may find Apple's `createinstallmedia` of use; see [https://support.apple.com/en-us/HT201372](https://support.apple.com/en-us/HT201372).
 
 Installation
 ------------
