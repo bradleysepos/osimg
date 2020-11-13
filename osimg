@@ -302,7 +302,7 @@ function make_osx_10_15 {
 # macOS 11.0 Big Sur
 function make_osx_11_0 {
 
-    exit_with_error 1 "${SELF_NAME}: support for macOS 11.0 not yet implemented"
+    exit_with_error 1 "${SELF_NAME}: support for macOS 11 Big Sur not yet implemented"
 
 }
 
