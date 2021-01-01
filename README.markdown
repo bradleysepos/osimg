@@ -69,5 +69,5 @@ osimg -h
 License
 -------
 
-Copyright 2020 Bradley Sepos  
+Copyright 2021 Bradley Sepos  
 Released under the MIT License. See [LICENSE](LICENSE) for details.
