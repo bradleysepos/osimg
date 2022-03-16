@@ -299,11 +299,17 @@ function make_osx_10_15 {
 
 }
 
-# macOS 11.0 Big Sur
-function make_osx_11_0 {
+# macOS 11 Big Sur
+function make_osx_11 {
 
     exit_with_error 1 "${SELF_NAME}: support for macOS 11 Big Sur not yet implemented"
 
+}
+
+# macOS 12 Monterey
+function make_osx_12 {
+
+    exit_with_error 1 "${SELF_NAME}: support for macOS 12 Monterey not yet implemented"
 }
 
 # Super user only, except when printing help or version information
@@ -412,31 +418,61 @@ mkdir "${BASE_MOUNT_TMP}" 2>/dev/null
 if hdiutil attach "${IESD}" -mountpoint "${IESD_MOUNT_TMP}" -nobrowse -noverify -quiet; then
     ARCHIVE_PATH=""
     if [[ -r "${IESD_MOUNT_TMP}/com_apple_MobileAsset_MacSoftwareUpdate/com_apple_MobileAsset_MacSoftwareUpdate.xml" ]]; then
+        # macOS 11+, get path to archive
         ARCHIVE_PATH=$(/usr/libexec/PlistBuddy -c 'Print :Assets:0:__RelativePath' "${IESD_MOUNT_TMP}/com_apple_MobileAsset_MacSoftwareUpdate/com_apple_MobileAsset_MacSoftwareUpdate.xml" 2>/dev/null)
+        if [[ "${ARCHIVE_PATH}" != "" ]] && [[ -r "${IESD_MOUNT_TMP}/${ARCHIVE_PATH}" ]]; then
+            # Attempt to extract base system image
+            if ! unzip -jqq "${IESD_MOUNT_TMP}/${ARCHIVE_PATH}" AssetData/Restore/BaseSystem.chunklist AssetData/Restore/BaseSystem.dmg -d "${SOURCE_TMP}" 2>/dev/null; then
+                # macOS 12+ archive does not have a base system image
+                # Attempt to extract the system version plist directly
+                if ! unzip -jqq "${IESD_MOUNT_TMP}/${ARCHIVE_PATH}" AssetData/boot/SystemVersion.plist -d "${SOURCE_TMP}" 2>/dev/null; then
+                    # Unable to locate system version plist
+                    exit_with_error 1 "${SELF_NAME}: unable to locate system version plist"
+                fi
+            fi
+        fi
     fi
-    if [[ "${ARCHIVE_PATH}" != "" ]] && [[ -r "${IESD_MOUNT_TMP}/${ARCHIVE_PATH}" ]]; then
-        unzip -jqq "${IESD_MOUNT_TMP}/${ARCHIVE_PATH}" AssetData/Restore/BaseSystem.chunklist AssetData/Restore/BaseSystem.dmg -d "${SOURCE_TMP}" 2>/dev/null
+    if [[ ! -e "${SOURCE_TMP}/SystemVersion.plist" ]]; then
+        # Attempt to get the system version plist and related info from base system image
+        if hdiutil attach "${SOURCE_TMP}/BaseSystem.dmg" -mountroot "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet || \
+           hdiutil attach "${IESD_MOUNT_TMP}/BaseSystem.dmg" -mountroot "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet || \
+           hdiutil attach "${IESD%InstallESD\.dmg}/BaseSystem.dmg" -mountroot "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet; then
+            BASE_MOUNT_TMP=$(cd "${BASE_MOUNT_TMP}/"*" Base System" && pwd -P)
+                if ! cp "${BASE_MOUNT_TMP}/System/Library/CoreServices/SystemVersion.plist" "${SOURCE_TMP}" 2>/dev/null; then
+                    # Unable to locate system version plist
+                    exit_with_error 1 "${SELF_NAME}: unable to locate system version plist"
+                fi
+                if ! cp "${BASE_MOUNT_TMP}/Install"*".app/Contents/Info.plist" "${SOURCE_TMP}" 2>/dev/null; then
+                    # Unable to locate info plist
+                    exit_with_error 1 "${SELF_NAME}: unable to locate info plist"
+                fi
+                VERSION_BUNDLE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "${BASE_MOUNT_TMP}"/Install*.app/Contents/Info.plist)
+                hdiutil detach "${BASE_MOUNT_TMP}" -quiet
+        else
+                # Unable to mount base system image
+                exit_with_error 1 "${SELF_NAME}: unable to mount base system image
+        eject the following volumes and quit Disk Utility before running ${NAME}
+        $(hdiutil info | grep '/dev/disk' | grep -E -e 'Base System' | awk -F'\t' '{ print $1 FS $3 }' | sed 's/ /\\ /g')"
+        fi
     fi
-    if hdiutil attach "${SOURCE_TMP}/BaseSystem.dmg" -mountroot "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet || \
-       hdiutil attach "${IESD_MOUNT_TMP}/BaseSystem.dmg" -mountroot "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet || \
-       hdiutil attach "${IESD%InstallESD\.dmg}/BaseSystem.dmg" -mountroot "${BASE_MOUNT_TMP}" -nobrowse -noverify -quiet; then
-        BASE_MOUNT_TMP=$(cd "${BASE_MOUNT_TMP}/"*" Base System" && pwd -P)
-        VERSION=$(/usr/libexec/PlistBuddy -c 'Print :ProductVersion' "${BASE_MOUNT_TMP}"/System/Library/CoreServices/SystemVersion.plist 2>/dev/null)
+    hdiutil detach "${IESD_MOUNT_TMP}" -quiet
+    if [[ ! -e "${SOURCE_TMP}/Info.plist" ]]; then
+        # Attempt to get info plist from installer app bundle
+        if ! cp "${SOURCE}/Contents/Info.plist" "${SOURCE_TMP}" 2>/dev/null; then
+            # Unable to locate info plist
+            exit_with_error 1 "${SELF_NAME}: unable to locate info plist"
+        fi
+    fi
+    if [[ -e "${SOURCE_TMP}/SystemVersion.plist" ]]; then
+        VERSION=$(/usr/libexec/PlistBuddy -c 'Print :ProductVersion' "${SOURCE_TMP}/SystemVersion.plist" 2>/dev/null)
         VERSION=$(echo "${VERSION}" | sed 's/^10\.16/11/')
         VERSION="${VERSION:-0}"
         [[ ! "${VERSION}" == *"."* ]] && VERSION="${VERSION}.0"
         [[ ! "${VERSION}" == *"."*"."* ]] && VERSION="${VERSION}.0"
-        VERSION_BUNDLE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "${BASE_MOUNT_TMP}"/Install*.app/Contents/Info.plist)
-        VERSION_BUILD=$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' "${BASE_MOUNT_TMP}"/System/Library/CoreServices/SystemVersion.plist)
+        VERSION_BUNDLE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "${SOURCE_TMP}/Info.plist")
+        VERSION_BUILD=$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' "${SOURCE_TMP}/SystemVersion.plist")
         VERSION_BUILD="${VERSION_BUILD:-0}"
-        hdiutil detach "${BASE_MOUNT_TMP}" -quiet
-    else
-        # Unable to mount base system image
-        exit_with_error 1 "${SELF_NAME}: unable to mount base system image
-eject the following volumes and quit Disk Utility before running ${NAME}
-$(hdiutil info | grep '/dev/disk' | grep -E -e 'Base System' | awk -F'\t' '{ print $1 FS $3 }' | sed 's/ /\\ /g')"
     fi
-    hdiutil detach "${IESD_MOUNT_TMP}" -quiet
 else
     # Unable to mount source image
     exit_with_error 1 "${SELF_NAME}: unable to mount source image
@@ -447,16 +483,14 @@ clean_up_quick
 while read MAJOR MINOR PATCH BUILD; do
     VERSION_ARRAY=("${MAJOR}" "${MINOR}" "${PATCH}" "${BUILD}")
 done <<< $(echo "${VERSION}.${VERSION_BUILD}" | awk -F '.' '{ print $1 " " $2 " " $3 " " $4 }')
-if [[ "${VERSION_ARRAY[0]}" -eq "11" ]] || [[ "${VERSION_ARRAY[0]}" -eq "10" ]]; then
-    if [[ "${VERSION_ARRAY[0]}" -eq "11" ]] || [[ "${VERSION_ARRAY[1]}" -gt "11" ]]; then
-        # 10.12+
-        VERSION_NAME="${VERSION_BUNDLE_NAME#Install macOS }"
-        VERSION_PREFIX="macOS"
-    elif [[ "${VERSION_ARRAY[1]}" -gt "6" ]] && [[ "${VERSION_ARRAY[1]}" -lt "12" ]]; then
-        # 10.7-10.11
-        VERSION_NAME="${VERSION_BUNDLE_NAME#Install*OS X }"
-        VERSION_PREFIX=$(echo "${VERSION_BUNDLE_NAME}" | sed -E -e 's/^Install ((Mac )?OS X)(.*)/\1/')
-    fi
+if [[ "${VERSION_ARRAY[0]}" -gt "10" ]] || [[ "${VERSION_ARRAY[1]}" -gt "11" ]]; then
+    # macOS era (10.12-10.15, 11+)
+    VERSION_NAME="${VERSION_BUNDLE_NAME#Install macOS }"
+    VERSION_PREFIX="macOS"
+elif [[ "${VERSION_ARRAY[1]}" -gt "6" ]] && [[ "${VERSION_ARRAY[1]}" -lt "12" ]]; then
+    # (Mac) OS X era (10.7-10.11)
+    VERSION_NAME="${VERSION_BUNDLE_NAME#Install*OS X }"
+    VERSION_PREFIX=$(echo "${VERSION_BUNDLE_NAME}" | sed -E -e 's/^Install ((Mac )?OS X)(.*)/\1/')
 fi
 if [[ "${VERSION_NAME:-}" != "" ]]; then
     VERSION_PRETTY="${VERSION_PREFIX} $(echo ${VERSION} | sed -E 's/(\.0)+$//') ${VERSION_NAME} (${VERSION_BUILD})"
@@ -532,7 +566,11 @@ IMAGE_MOUNT="${TEMP}/${NAME}-temp.mount"
 IESD_MOUNT="${TEMP}/${NAME}-installesd.mount"
 
 # Build image
-make_osx_"${VERSION_ARRAY[0]}"_"${VERSION_ARRAY[1]}"
+if [[ "${VERSION_ARRAY[0]}" -gt "10" ]]; then
+    make_osx_"${VERSION_ARRAY[0]}"
+else
+    make_osx_"${VERSION_ARRAY[0]}"_"${VERSION_ARRAY[1]}"
+fi
 
 # Update ownership
 echo "Updating ownership..."
