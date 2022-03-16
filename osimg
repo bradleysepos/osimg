@@ -304,6 +304,27 @@ function make_osx_11 {
 
     exit_with_error 1 "${SELF_NAME}: support for macOS 11 Big Sur not yet implemented"
 
+    # macOS 11 installer SharedSupport.dmg uses a new layout; example from macOS 11.6.5
+    #
+    # hdiutil attach "${IESD}" -mountpoint "${IESD_MOUNT}" -nobrowse -quiet
+    # ls "${IEST_MOUNT}"
+    # total 3920
+    # -rw-r--r--  1 root  wheel      188 Mar  3 01:35 InstallInfo.plist
+    # drwxr-xr-x  3 root  wheel      102 Mar  3 01:35 SFR
+    # -rw-r--r--  1 root  wheel  2001087 Mar  3 01:25 UpdateBrain.zip
+    # drwxr-xr-x  5 root  wheel      170 Mar  3 01:34 com_apple_MobileAsset_MacSoftwareUpdate
+    #
+    #
+    # Can use the createinstallmedia method if all else fails
+    # Reference: https://osxdaily.com/2020/12/14/how-create-macos-big-sur-iso/
+    #
+    # hdiutil create -o /tmp/MacBigSur -size 12500m -volname MacBigSur -layout SPUD -fs HFS+J
+    # hdiutil attach /tmp/MacBigSur.dmg -noverify -mountpoint /Volumes/MacBigSur
+    # sudo /Applications/Install\ macOS\ Big\ Sur/Contents/Resources/createinstallmedia --volume /Volumes/MacBigSur --nointeraction
+    # hdiutil detach /Volumes/MacBigSur/
+    # hdiutil convert /tmp/MacBigSur.dmg -format UDTO -o ~/Desktop/MacBigSur.cdr
+    # mv ~/Desktop/MacBigSur.cdr ~/Desktop/BigSur.iso
+
 }
 
 # macOS 12 Monterey
