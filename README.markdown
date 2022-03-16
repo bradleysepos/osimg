@@ -10,7 +10,7 @@ Requirements
 - Mac OS X 10.7 Lion through macOS 10.15 Catalina installer app or `InstallESD.dmg`†
 - OS X 10.9 Mavericks or later host system
 
-While the installer for macOS 11 Big Sur is properly identified, creating a bootable disk image is not yet possible using `osimg`. In the meantime, you may find Apple's `createinstallmedia` of use; see [https://support.apple.com/en-us/HT201372](https://support.apple.com/en-us/HT201372).
+While the installers for macOS 11 Big Sur and macOS 12 Monterey are properly identified, creating a bootable disk image is not yet possible using `osimg`. In the meantime, you may find Apple's `createinstallmedia` of use; see [https://support.apple.com/en-us/HT201372](https://support.apple.com/en-us/HT201372).
 
 Installation
 ------------
@@ -33,7 +33,7 @@ osimg source [destination]
 
 *When both source and destination are provided*, osimg prints the source version and creates a bootable disk image from the source.
 
-Say we've downloaded the Sierra installer from the Mac App Store, and it's in our Applications directory.
+Say we've downloaded the Sierra installer, and it's in our Applications directory.
 
 ```
 sudo osimg "/Applications/Install macOS Sierra.app" ~/"OS Images/"
@@ -49,7 +49,7 @@ If the provided destination is a directory, osimg automatically names the final 
 sudo osimg "/Applications/Install macOS Sierra.app" ~/"OS Images/Sierra.iso"
 ```
 
-osimg also accepts the `InstallESD.dmg` typically found in `Install*.app/Contents/SharedSupport/` as a source (useful when the installer app has been discarded)†:
+osimg also accepts the `InstallESD.dmg` found inside older installers at `Install*.app/Contents/SharedSupport/` as a source (useful when the complete installer app has been discarded)†:
 
 ```
 sudo osimg InstallESD.dmg Sierra.iso
